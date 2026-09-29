@@ -7,5 +7,8 @@ Cookbook/
 SwiftCrossCompilers/
 
 # Build output
-plugins/kiwi.lv2/build/
-swift_kiwi/.build/
+plugins/kiwi/build/
+legacy/swift_kiwi/.build/
+
+# Plan execution scratch
+.superpowers/
