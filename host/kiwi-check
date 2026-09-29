@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Reports whether kiwi is healthy. Exit 0 when everything expected is present.
+set -u
+export JACK_PROMISCUOUS_SERVER=jack
+patch_file=$(dirname "$0")/kiwi.patch
+problems=0
+
+for unit in jack kiwi-host kiwi-patch amidiminder rtpmidid; do
+    state=$(systemctl is-active "$unit")
+    printf '%-12s %s\n' "$unit" "$state"
+    [ "$state" = active ] || problems=$((problems + 1))
+done
+
+ports=$(jack_lsp 2>/dev/null)
+for id in $(awk '$1 == "add" { print $3 }' "$patch_file"); do
+    if printf '%s\n' "$ports" | grep -q "^effect_$id:"; then
+        printf 'effect_%-5s loaded\n' "$id"
+    else
+        printf 'effect_%-5s MISSING\n' "$id"; problems=$((problems + 1))
+    fi
+done
+
+connections=$(jack_lsp -c 2>/dev/null)
+missing=0
+while read -r _ src dst; do
+    [[ "$src" == @* ]] && continue
+    if ! printf '%s\n' "$connections" | awk -v s="$src" -v d="$dst" '
+        /^[^ \t]/ { port = $0 } /^[ \t]/ { sub(/^[ \t]+/, ""); if (port == s && $0 == d) found = 1 }
+        END { exit !found }'; then
+        echo "connection MISSING: $src -> $dst"; missing=$((missing + 1))
+    fi
+done < <(grep '^connect ' "$patch_file")
+echo "connections missing: $missing"
+problems=$((problems + missing))
+
+echo "xruns this boot: $(journalctl -u jack -b --no-pager | grep -ci xrun)"
+echo "temperature: $(vcgencmd measure_temp)  throttled: $(vcgencmd get_throttled)"
+top -bn1 | awk '/mod-host|jackd/ { print "cpu " $9 "% " $12 }'
+
+echo "problems: $problems"
+[ "$problems" -eq 0 ]
