@@ -1,0 +1,11 @@
+.DS_Store
+backup/
+
+# Third-party clones from the previous attempt
+pure-data/
+Cookbook/
+SwiftCrossCompilers/
+
+# Build output
+plugins/kiwi.lv2/build/
+swift_kiwi/.build/
