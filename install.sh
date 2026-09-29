@@ -21,7 +21,11 @@ if [ "$(dpkg-query -W -f='${Version}' rtpmidid 2>/dev/null || true)" != "$RTPMID
     curl -sSL -o "$deb" "https://github.com/davidmoreno/rtpmidid/releases/download/v24.12/rtpmidid_24.12.2_arm64.deb"
     sudo apt-get install -y -qq "$deb"
 fi
-sudo systemctl enable --now rtpmidid
+sudo install -m 644 "$KIWI_DIR/system/rtpmidid.ini" /etc/rtpmidid/kiwi.ini
+sudo install -D -m 644 "$KIWI_DIR/system/rtpmidid-kiwi.conf" /etc/systemd/system/rtpmidid.service.d/kiwi.conf
+sudo systemctl daemon-reload
+sudo systemctl enable rtpmidid
+sudo systemctl restart rtpmidid
 
 section "MIDI routing"
 # Replaces the /etc/amidiminder.rules symlink (to /etc/default/amidiminder.rules)
@@ -49,6 +53,25 @@ sudo systemctl daemon-reload
 sudo systemctl disable --now modep-mod-ui modep-mod-host 2>/dev/null || true
 sudo systemctl enable kiwi-host kiwi-patch
 sudo systemctl restart kiwi-host
+
+section "System trim"
+# Disabled or masked, never uninstalled: see README for how to undo.
+sudo systemctl set-default multi-user.target
+# patchbox-init re-activates the active Patchbox module (MODEP) on every boot,
+# re-enabling its services; deactivate the module instead of fighting it.
+if [ -n "$(sudo patchbox module active 2>/dev/null)" ]; then
+    sudo patchbox module deactivate
+fi
+for unit in lightdm wayvnc-control patchbox-vnc.target modep-mod-host modep-mod-ui \
+            modep-touchosc2midi touchosc2midi modep-update.path cups cups-browsed \
+            bluetooth hciuart ModemManager blokas-telemetry.target wifi-hotspot \
+            glamor-test rp1-test apt-daily.timer apt-daily-upgrade.timer; do
+    sudo systemctl disable "$unit" 2>/dev/null || true
+done
+for unit in fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.service \
+            pipewire-pulse.socket wireplumber.service; do
+    sudo systemctl --global mask "$unit"
+done
 
 echo
 echo "kiwi install done"

@@ -84,6 +84,28 @@ journalctl -u kiwi-patch -b               # what the patch loader did this boot
 ~/kiwi/host/kiwi-check                    # full health check
 ```
 
+## What `install.sh` turns off
+
+The Pi boots to a console (`multi-user.target`), not a desktop. Nothing is uninstalled:
+
+- The Patchbox MODEP module is deactivated (`patchbox module deactivate`); otherwise
+  `patchbox-init` re-enables MODEP's services on every boot.
+- Disabled: `lightdm`, `wayvnc-control`, `patchbox-vnc.target`, MODEP services,
+  `touchosc2midi`, `cups`, `cups-browsed`, `bluetooth`, `hciuart`, `ModemManager`,
+  `blokas-telemetry.target`, `wifi-hotspot`, `glamor-test`, `rp1-test`, and the
+  `apt-daily` timers (so it never upgrades itself mid-gig).
+- Masked for all users: FluidSynth, PipeWire, PipeWire-Pulse and WirePlumber.
+- rtpmidid runs with `system/rtpmidid.ini` (via a systemd drop-in): it receives network
+  MIDI but does not export the Pi's own MIDI ports back to the network.
+
+To undo: `sudo systemctl set-default graphical.target`, `sudo patchbox module activate modep`,
+`sudo systemctl enable <unit>` for anything wanted back, and
+`sudo systemctl --global unmask fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service`.
+
+Network: the Pi reaches the internet over Wi-Fi; the wired LAN (`192.168.1.126`) is kept
+for SSH only (`ipv4.never-default` on the wired connection). The Patchbox hotspot
+(`pb-hotspot`) has autoconnect off. These were set by hand, not by `install.sh`.
+
 ## Development
 
 The custom plugins' DSP core is plain C with unit tests that run on macOS and on the Pi:
