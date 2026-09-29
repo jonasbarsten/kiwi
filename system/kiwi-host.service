@@ -1,0 +1,18 @@
+[Unit]
+Description=Kiwi audio host (mod-host)
+After=jack.service
+BindsTo=jack.service
+
+[Service]
+User=patch
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Environment=JACK_PROMISCUOUS_SERVER=jack
+Environment=LV2_PATH=/home/patch/.lv2:/usr/local/lib/lv2:/usr/lib/lv2:/var/modep/lv2
+# No -f feedback port: with one, mod-host waits for a feedback client before serving commands.
+ExecStart=/usr/bin/mod-host -n -p 5555
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Kiwi patch loader
+After=kiwi-host.service
+BindsTo=kiwi-host.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=patch
+Environment=JACK_PROMISCUOUS_SERVER=jack
+ExecStart=/home/patch/kiwi/host/kiwi-load /home/patch/kiwi/host/kiwi.patch
+
+[Install]
+WantedBy=kiwi-host.service

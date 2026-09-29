@@ -1,0 +1,97 @@
+# Kiwi patch for mod-host. Instance numbers:
+# 0 Pianoteq  1 sfizz  2 amsynth  3 kiwi carrier  4 TalkBox  5 kiwi mix  6 reverb  7 limiter
+
+add https://www.modartt.com/lv2/Pianoteq8 0
+add http://sfztools.github.io/sfizz 1
+add http://code.google.com/p/amsynth/amsynth 2
+add https://github.com/jonasbarsten/kiwi#carrier 3
+add http://moddevices.com/plugins/mda/TalkBox 4
+add https://github.com/jonasbarsten/kiwi#mix 5
+add urn:dragonfly:room 6
+add http://gareus.org/oss/lv2/dpl#stereo 7
+
+# Pianoteq: its own reverb off (we have a shared reverb)
+patch_set 0 https://www.modartt.com/lv2/Pianoteq8:Reverb_20Switch 0
+
+# sfizz: load the one-sample instrument
+patch_set 1 http://sfztools.github.io/sfizz:sfzfile /home/patch/kiwi/sampler/kiwi.sfz
+
+# amsynth: the carrier synth voice from the previous MODEP patch (plain saw)
+param_set 2 amp_attack 0
+param_set 2 amp_decay 0
+param_set 2 amp_sustain 0.41
+param_set 2 amp_release 0
+param_set 2 osc1_waveform 2
+param_set 2 osc2_waveform 2
+param_set 2 osc_mix 0
+param_set 2 filter_cutoff 1.5
+param_set 2 filter_resonance 0
+param_set 2 filter_env_amount 0
+param_set 2 filter_attack 0
+param_set 2 filter_decay 0
+param_set 2 filter_sustain 1
+param_set 2 filter_release 0
+param_set 2 master_vol 0.67
+param_set 2 reverb_wet 0
+param_set 2 distortion_crunch 0
+
+# TalkBox: modulator (mic) on left, carrier on right, fully wet
+param_set 4 carrier 0
+param_set 4 wet 100
+param_set 4 dry 0
+param_set 4 quality 100
+
+# Reverb: fully wet on the send bus
+param_set 6 dry_level 0
+param_set 6 early_level 20
+param_set 6 late_level 60
+param_set 6 size 16
+param_set 6 decay 1.6
+
+# Limiter at -1 dBFS
+param_set 7 threshold -1
+
+# MIDI
+connect @MIDI_IN@ effect_0:in
+connect @MIDI_IN@ effect_1:control
+connect @MIDI_IN@ effect_2:midi
+connect @MIDI_IN@ mod-host:midi_in
+
+# Carrier sources
+connect effect_2:out_l effect_3:synth_l
+connect effect_2:out_r effect_3:synth_r
+connect effect_0:audio_out_1 effect_3:piano_l
+connect effect_0:audio_out_2 effect_3:piano_r
+connect effect_1:out_left effect_3:sampler_l
+connect effect_1:out_right effect_3:sampler_r
+
+# Vocoder
+connect system:capture_1 effect_4:left_in
+connect effect_3:carrier effect_4:right_in
+
+# Mixer inputs
+connect effect_0:audio_out_1 effect_5:piano_l
+connect effect_0:audio_out_2 effect_5:piano_r
+connect effect_1:out_left effect_5:sampler_l
+connect effect_1:out_right effect_5:sampler_r
+connect effect_4:left_out effect_5:vocoder_l
+connect effect_4:right_out effect_5:vocoder_r
+
+# Reverb send, then dry bus and reverb return into the limiter
+connect effect_5:send_l effect_6:lv2_audio_in_1
+connect effect_5:send_r effect_6:lv2_audio_in_2
+connect effect_5:dry_l effect_7:inL
+connect effect_5:dry_r effect_7:inR
+connect effect_6:lv2_audio_out_1 effect_7:inL
+connect effect_6:lv2_audio_out_2 effect_7:inR
+connect effect_7:outL system:playback_1
+connect effect_7:outR system:playback_2
+
+# Knobs: midi_map <instance> <symbol> <channel 0-15> <cc> <min> <max>
+midi_map 5 piano_vol 0 20 0 1
+midi_map 5 piano_send 0 21 0 1
+midi_map 5 sampler_vol 0 22 0 1
+midi_map 5 sampler_send 0 23 0 1
+midi_map 5 vocoder_vol 0 24 0 1
+midi_map 5 vocoder_send 0 25 0 1
+midi_map 3 blend 0 26 0 2

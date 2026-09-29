@@ -32,5 +32,23 @@ sudo systemctl restart amidiminder
 section "Kiwi plugins"
 make -C "$KIWI_DIR/plugins/kiwi" clean test install
 
+section "Pianoteq"
+# Symlink so the original bundle in ~/.vst stays where it is.
+mkdir -p "$HOME/.lv2"
+ln -sfn "$HOME/.vst/Pianoteq 8.lv2" "$HOME/.lv2/Pianoteq 8.lv2"
+prefs="$HOME/.config/Modartt/Pianoteq83.prefs"
+if grep -q '<VALUE name="voices" val="' "$prefs"; then
+    sed -i 's/<VALUE name="voices" val="[0-9]*"\/>/<VALUE name="voices" val="32"\/>/' "$prefs"
+fi
+grep -E 'name="(voices|engine_rate)"' "$prefs"
+
+section "Host"
+chmod +x "$KIWI_DIR/host/kiwi-load"
+sudo install -m 644 "$KIWI_DIR/system/kiwi-host.service" "$KIWI_DIR/system/kiwi-patch.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl disable --now modep-mod-ui modep-mod-host 2>/dev/null || true
+sudo systemctl enable kiwi-host kiwi-patch
+sudo systemctl restart kiwi-host
+
 echo
 echo "kiwi install done"

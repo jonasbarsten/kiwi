@@ -50,6 +50,32 @@ ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh'
 
 `install.sh` is safe to re-run.
 
+## How the patch works
+
+`host/kiwi.patch` is the single place that defines the instrument: which plugins load,
+their settings, every audio/MIDI connection, and the knob (CC) mapping. It is plain
+[mod-host](https://github.com/moddevices/mod-host) commands, sent line by line by
+`host/kiwi-load` when `kiwi-patch.service` starts. `@MIDI_IN@` stands for the JACK port
+of the kernel `Midi Through` device, where all MIDI sources are merged.
+
+| Instance | Plugin | Role |
+|---|---|---|
+| 0 | Pianoteq 8 | piano |
+| 1 | sfizz (`sampler/kiwi.sfz`) | sampler |
+| 2 | amsynth | synth voice for the vocoder carrier |
+| 3 | kiwi carrier | blends synth / piano / sampler into the carrier |
+| 4 | mda TalkBox | vocoder: mic on Pisound input 1 (left), carrier on right |
+| 5 | kiwi mix | per-mode volume and post-fader reverb send |
+| 6 | Dragonfly Room | shared reverb, fully wet |
+| 7 | x42 dpl | limiter at −1 dBFS before the Pisound output |
+
+To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
+(0 = channel 1). To change the sampler's root key or envelope, edit `sampler/kiwi.sfz`.
+
+Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
+`install.sh` caps polyphony at 32 voices; the internal engine rate is 24 kHz. The plugin
+runs its default preset with its own reverb switched off.
+
 ## Operations
 
 ```bash
