@@ -1,0 +1,4 @@
+# Kiwi: every MIDI source feeds Midi Through; the audio host reads only Midi Through.
+.hw --> Midi Through
+rtpmidid --> Midi Through
+Midi Through -x-> Midi Through
