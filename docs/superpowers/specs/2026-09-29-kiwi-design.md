@@ -78,7 +78,7 @@ already provides), Pure Data (fragile Pianoteq hosting, hand-built DSP).
 ### 3.3 Signal flow
 
 ```
-MIDI (Pisound DIN, USB, RTP) ──amidiminder rules──► snd-virmidi port ──► mod-host
+MIDI (Pisound DIN, USB, RTP) ──amidiminder rules──► Midi Through ──────► mod-host
                                                         │ (all plugins, one channel)
             ┌──────────────┬──────────────┬─────────────┘
             ▼              ▼              ▼
@@ -120,22 +120,27 @@ Design rules:
 
 ### 3.4 MIDI
 
-- One stable MIDI entry point: a kernel virtual MIDI device (`snd-virmidi`,
-  loaded at boot). JACK's `-X seq` bridge exposes it as a fixed JACK MIDI port.
+- One stable MIDI entry point: the kernel `Midi Through` port (`snd-seq-dummy`,
+  already present). JACK's `-X seq` bridge exposes it as a JACK MIDI port with
+  the stable alias `Midi-Through:midi/playback_1`; the loader resolves the JACK
+  port name from that alias at boot.
 - `kiwi.patch` connects that port to every instrument plugin and to `mod-host`'s
   CC-mapping input.
 - `amidiminder` runs with **explicit** rules (replacing the default
   `.hw <---> .app` wildcard): every hardware MIDI port (Pisound DIN, any USB
   device, including hot-plugged ones) and every `rtpmidid` session is routed into
-  the virmidi port. Nothing else is interconnected.
-- `rtpmidid` (official arm64 `.deb` from its GitHub releases; not in apt)
-  advertises over avahi so macOS Audio MIDI Setup → Network can connect.
-- All modes listen on one MIDI channel for now. Channel and key-range filters per
-  mode are configuration in `kiwi.patch`, not code changes.
+  `Midi Through`. Nothing else is interconnected.
+- `rtpmidid` 24.12.2 (arm64 `.deb` from its GitHub releases; not in apt; newer
+  releases are built for Debian trixie only) advertises over avahi so macOS
+  Audio MIDI Setup → Network can connect.
+- All instruments receive every MIDI channel for now. A later channel or
+  key-range split is configuration: insert an x42 MIDI filter plugin
+  (`x42-plugins`) in front of an instrument in `kiwi.patch`, not code changes.
 
 ### 3.5 Controls (CC map)
 
-Defaults, defined in `kiwi.patch`, accepted on any channel:
+Defaults, defined in `kiwi.patch`, on MIDI channel 1 (`mod-host`'s `midi_map`
+binds one channel per mapping; the channel is a single value in `kiwi.patch`):
 
 | CC | Parameter |
 |---|---|
@@ -147,7 +152,7 @@ Defaults, defined in `kiwi.patch`, accepted on any channel:
 | 25 | Vocoder reverb send |
 | 26 | Carrier blend |
 
-## 4. Custom plugins (`plugins/kiwi.lv2`)
+## 4. Custom plugins (`plugins/kiwi`, installed as `kiwi.lv2`)
 
 One LV2 bundle, two plugins. Each plugin is a plain-C DSP core with no LV2
 dependency plus a thin LV2 wrapper, so the core is unit-testable on macOS and
@@ -208,13 +213,20 @@ Linux.
 
 ## 6. Pianoteq configuration
 
-Target settings: polyphony capped at ~32, reduced internal sample rate, Pianoteq
+Target settings: polyphony capped at 32, reduced internal sample rate, Pianoteq
 reverb off, one fixed preset at boot.
 
-**Open risk, resolved first in the plan:** how the Pianoteq LV2 instance under
-`mod-host` picks its preset and engine settings (shared prefs file, LV2 presets
-via `mod-host preset_load`, or control-port parameters). This is verified on the
-device before any other Pianoteq work.
+Findings on the device:
+
+- Engine settings are global Pianoteq preferences in
+  `~/.config/Modartt/Pianoteq83.prefs`, shared by the standalone and the LV2:
+  `voices` (currently 64), `engine_rate` (already 24000), `multicore` (2).
+  `install.sh` sets `voices` to 32; the rest is kept.
+- The LV2 exposes its sound parameters as LV2 `patch` parameters (e.g.
+  `Volume`, reverb switch) and saves its preset through the LV2 state
+  interface. The first version runs the plugin's default preset with its
+  reverb switched off via `patch_set`. Pinning a different preset later uses
+  `mod-host`'s `state_save`/`state_load` for the instance state.
 
 ## 7. Sampler configuration
 
@@ -225,7 +237,8 @@ device before any other Pianoteq work.
 ```
 
 Root key, envelope and loop settings are changed in this file, not in code. The
-sample file lives next to it in the repo.
+sample file lives next to it in the repo; the first version uses the previous
+attempt's `kiwi-pd/piano.wav`, copied to `sampler/sample.wav`.
 
 ## 8. Repository layout
 
@@ -236,9 +249,9 @@ kiwi/
   host/kiwi.patch            mod-host commands (plugins, connections, CC map)
   host/kiwi-load             loader script used by kiwi-patch.service
   host/kiwi-check            health check (services, plugins, connections, xruns, CPU)
-  plugins/kiwi.lv2/          custom bundle: src/, ttl, Makefile, tests/
+  plugins/kiwi/              custom LV2 bundle source: src/, ttl/, Makefile, tests/
   sampler/kiwi.sfz, sample.wav
-  system/                    systemd units, amidiminder rules, modules-load conf
+  system/                    systemd units, amidiminder rules
   docs/superpowers/specs/    this document
   legacy/                    previous attempt's own files (Pd patches, C, Swift)
   backup/                    git-ignored; Pianoteq prefs backup
