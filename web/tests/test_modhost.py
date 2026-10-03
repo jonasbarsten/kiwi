@@ -15,6 +15,10 @@ class ParseResponseTest(unittest.TestCase):
         with self.assertRaises(HostError):
             parse_response(b'hello')
 
+    def test_non_numeric_code_is_host_error(self):
+        with self.assertRaises(HostError):
+            parse_response(b'resp x')
+
 
 class HostClientTest(unittest.TestCase):
     def setUp(self):

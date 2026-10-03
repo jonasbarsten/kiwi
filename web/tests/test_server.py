@@ -8,7 +8,7 @@ import time
 import unittest
 
 from kiwi_web.modhost import HostClient
-from kiwi_web.server import App, HostLink, Model, make_server, parse_args, systemd_units_ready
+from kiwi_web.server import App, HostLink, Model, make_server, parse_args, restore, systemd_units_ready
 from kiwi_web.state import StateStore
 from tests.fakehost import FakeHost
 
@@ -140,6 +140,29 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertTrue(wait_for(lambda: self.host.patch.get((0, uri)) == 0.4))
 
+    def test_idle_connection_times_out(self):
+        import socket as socketlib
+        from kiwi_web import server as server_module
+        original = server_module.Handler.timeout
+        self.assertIsNotNone(original, 'connections must not be allowed to idle forever')
+        self.assertLessEqual(original, 60)
+        server_module.Handler.timeout = 0.5
+        try:
+            conn = socketlib.create_connection(('127.0.0.1', self.port), timeout=5)
+            time.sleep(1.5)
+            self.assertEqual(conn.recv(100), b'', 'idle connection still open')
+            conn.close()
+        finally:
+            server_module.Handler.timeout = original
+
+    def test_foreign_host_header_refused(self):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        conn.request('GET', '/params.json', headers={'Host': 'evil.example'})
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        self.assertEqual(response.status, 403)
+
     def test_post_requires_origin(self):
         status, _ = self.request('POST', '/set', {'changes': []}, origin=False)
         self.assertEqual(status, 403)
@@ -166,26 +189,78 @@ class ServerTest(unittest.TestCase):
 
 
 class UnitsReadyTest(unittest.TestCase):
-    """`systemctl is-active a b` succeeds when ANY unit is active; we need ALL."""
+    """Ready once kiwi-patch and kiwi-restore finished (active or failed) since kiwi-host started."""
 
-    def fake_run(self, states):
+    def fake_run(self, host, patch, restore):
+        def block(state, changed, entered=0):
+            return (f'ActiveState={state}\nActiveEnterTimestampMonotonic={entered}\n'
+                    f'StateChangeTimestampMonotonic={changed}\n')
+
         class Result:
-            stdout = ''.join(f'{s}\n' for s in states)
-            returncode = 0 if 'active' in states else 3
+            stdout = '\n'.join([block(host[0], host[1], host[1]), block(*patch), block(*restore)])
+            returncode = 0
         return lambda *args, **kwargs: Result()
 
-    def test_all_active(self):
-        self.assertTrue(systemd_units_ready(run=self.fake_run(['active', 'active'])))
+    def test_both_finished_after_host_start(self):
+        self.assertTrue(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('active', 160))))
 
-    def test_one_still_activating(self):
-        self.assertFalse(systemd_units_ready(run=self.fake_run(['active', 'activating'])))
+    def test_failed_restore_still_counts_as_finished(self):
+        self.assertTrue(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('failed', 160))))
 
-    def test_none_active(self):
-        self.assertFalse(systemd_units_ready(run=self.fake_run(['inactive', 'inactive'])))
+    def test_restore_still_running(self):
+        self.assertFalse(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('activating', 160))))
+
+    def test_stale_state_from_previous_host_start(self):
+        self.assertFalse(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 50), ('active', 60))))
+
+    def test_host_not_running(self):
+        self.assertFalse(systemd_units_ready(run=self.fake_run(('activating', 100), ('active', 150), ('active', 160))))
+
+
+class RestoreTest(unittest.TestCase):
+    def test_lost_connection_is_logged_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, 'state.json')
+            with open(state, 'w') as f:
+                json.dump({'params': {'5:piano_vol': 0.3, '5:piano_send': 0.4}}, f)
+            host = FakeHost({(5, 'piano_vol'): 0.8, (5, 'piano_send'): 0.2}, close_after=1)
+            args = parse_args(['--state', state, '--host-port', str(host.port)])
+            self.assertEqual(restore(args), 0)
+            host.close()
+
+
+class StreamCountTest(unittest.TestCase):
+    def test_missing_monitor_does_not_leak_viewers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {}
+            for name, content in [('kiwi.patch', PATCH), ('params.json', json.dumps(PARAMS))]:
+                paths[name] = os.path.join(tmp, name)
+                with open(paths[name], 'w') as f:
+                    f.write(content)
+            os.mkdir(os.path.join(tmp, 'static'))
+            with open(os.path.join(tmp, 'static', 'index.html'), 'w') as f:
+                f.write('kiwi')
+            args = parse_args(['--patch', paths['kiwi.patch'], '--params', paths['params.json'],
+                               '--static', os.path.join(tmp, 'static'), '--state', os.path.join(tmp, 's.json')])
+            app = App(args, units_ready=lambda: False, monitor_command=['/nonexistent/aseqdump'])
+            self.assertTrue(app.open_stream())
+            app.close_stream()
+            self.assertEqual(app._streams, 0)
+            self.assertTrue(app.open_stream())
+            app.close_stream()
+            self.assertEqual(app._streams, 0)
+
+
+class BrokenStore(StateStore):
+    def due(self):
+        return True
+
+    def flush(self):
+        raise OSError('disk full')
 
 
 class LinkTest(unittest.TestCase):
-    def make_link(self, ready):
+    def make_link(self, ready, store_class=StateStore):
         meta = {'plugins': [{'instance': 5, 'title': 'Mix', 'kind': 'port', 'params': [
             {'symbol': 'piano_vol', 'name': 'v', 'min': 0, 'max': 1, 'default': 0.8, 'baseline': 0.8,
              'type': 'float'}]}], 'cc_map': []}
@@ -193,9 +268,16 @@ class LinkTest(unittest.TestCase):
         self.host = FakeHost({(5, 'piano_vol'): 0.8})
         self.clock = [0.0]
         link = HostLink(Model(), HostClient(('127.0.0.1', self.host.port), timeout=5), meta,
-                        StateStore(os.path.join(self.dir.name, 's.json')), ready, clock=lambda: self.clock[0])
+                        store_class(os.path.join(self.dir.name, 's.json')), ready, clock=lambda: self.clock[0])
         threading.Thread(target=link.run, daemon=True).start()
         return link
+
+    def test_link_survives_unexpected_errors(self):
+        self.link = self.make_link(lambda: True, store_class=BrokenStore)
+        time.sleep(0.5)
+        self.link.set_value('port', 5, 'piano_vol', 0.4)
+        self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - 0.4) < 1e-6),
+                        'link thread died after a store error')
 
     def tearDown(self):
         self.link.stop()

@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -69,11 +70,25 @@ def read_temperature(path='/sys/class/thermal/thermal_zone0/temp'):
 
 
 def systemd_units_ready(run=subprocess.run):
-    # `systemctl is-active a b` exits 0 when ANY unit is active, so check every state line.
-    result = run(['systemctl', 'is-active', 'kiwi-patch', 'kiwi-restore'],
+    """True once kiwi-patch and kiwi-restore have finished since kiwi-host last started.
+
+    A failed loader counts as finished (it no longer needs mod-host); a state left
+    over from the previous host start does not.
+    """
+    result = run(['systemctl', 'show', '-p', 'ActiveState', '-p', 'ActiveEnterTimestampMonotonic',
+                  '-p', 'StateChangeTimestampMonotonic', 'kiwi-host', 'kiwi-patch', 'kiwi-restore'],
                  capture_output=True, text=True)
-    states = result.stdout.split()
-    return len(states) == 2 and all(state == 'active' for state in states)
+    blocks = [dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+              for block in result.stdout.strip().split('\n\n')]
+    if len(blocks) != 3:
+        return False
+    host, *loaders = blocks
+    if host.get('ActiveState') != 'active':
+        return False
+    started = int(host.get('ActiveEnterTimestampMonotonic') or 0)
+    return all(unit.get('ActiveState') in ('active', 'failed')
+               and int(unit.get('StateChangeTimestampMonotonic') or 0) >= started
+               for unit in loaders)
 
 
 def param_name(plugin, param):
@@ -147,8 +162,11 @@ class HostLink:
         while not self._stop:
             self._wake.wait(timeout=0.2)
             self._wake.clear()
-            if self.store.due() and self.store.flush():
-                self.model.update('status:saved', time.time())
+            try:
+                if self.store.due() and self.store.flush():
+                    self.model.update('status:saved', time.time())
+            except OSError as error:
+                print(f'kiwi-web: autosave failed: {error!r}', flush=True)
             if not self._needed():
                 if self.client.connected:
                     self.client.close()
@@ -172,6 +190,11 @@ class HostLink:
                     next_resync = now + 5.0
             except HostError:
                 self.model.update('status:host', 'offline')
+            except Exception as error:  # never let the link thread die silently
+                print(f'kiwi-web: host link error: {error!r}', flush=True)
+                self.client.close()
+                self.model.update('status:host', 'offline')
+                self._wake.wait(timeout=2.0)
 
     def _connect(self):
         if not self.units_ready():
@@ -319,28 +342,34 @@ class App:
         return True
 
     def open_stream(self):
+        # Monitor start/stop happen under the lock so a closing and an opening
+        # viewer cannot leave the monitor stopped while someone is watching.
         with self._streams_lock:
             if self._streams >= MAX_STREAMS:
                 return False
             self._streams += 1
-            first = self._streams == 1
-        if first:
-            self.monitor.start()
+            if self._streams == 1:
+                try:
+                    self.monitor.start()
+                except OSError as error:
+                    print(f'kiwi-web: MIDI monitor not started: {error!r}', flush=True)
         self.link.add_viewer()
         return True
 
     def close_stream(self):
         with self._streams_lock:
             self._streams -= 1
-            last = self._streams == 0
+            if self._streams == 0:
+                self.monitor.stop()
         self.link.remove_viewer()
-        if last:
-            self.monitor.stop()
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'kiwi-web'
     protocol_version = 'HTTP/1.1'
+    # A phone that drops off Wi-Fi never closes its connections; time them out.
+    # Event streams write at least every KEEPALIVE seconds, well within this.
+    timeout = 30
 
     def log_message(self, format, *args):
         pass
@@ -371,7 +400,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, content_type, headers)
 
     def _outsider(self):
-        if security.is_private(self.client_address[0]):
+        if (security.is_private(self.client_address[0])
+                and security.host_allowed(self.headers.get('Host'), self.connection.getsockname()[0],
+                                          self.server.host_names)):
             return False
         self._send(403, b'forbidden\n')
         return True
@@ -419,6 +450,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, b'too many viewers\n')
             return
         self.close_connection = True
+        # A peer that vanished without closing (phone left Wi-Fi) would otherwise
+        # keep this stream, the mod-host link and the MIDI monitor alive for ~15 min.
+        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, 'TCP_USER_TIMEOUT'):
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 20000)
         try:
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -445,6 +481,8 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, app):
         super().__init__(address, Handler)
         self.app = app
+        name = socket.gethostname()
+        self.host_names = {'localhost', name, f'{name}.local'}
 
 
 def make_server(address, app):
@@ -470,6 +508,7 @@ def restore(args):
                 return 1
             time.sleep(1)
     failures = 0
+    total = len(data['params']) + len(data['patch_params'])
     try:
         for key, value in data['params'].items():
             instance, symbol = StateStore.split_key(key)
@@ -477,9 +516,12 @@ def restore(args):
         for key, value in data['patch_params'].items():
             instance, uri = StateStore.split_key(key)
             failures += client.patch_set(instance, uri, value) != 0
+    except HostError as error:
+        # Logged, not fatal: a failed unit would keep kiwi-web waiting.
+        print(f'kiwi-web: restore stopped: {error}', flush=True)
+        failures = total
     finally:
         client.close()
-    total = len(data['params']) + len(data['patch_params'])
     print(f'kiwi-web: restored {total} value(s), {failures} failure(s)', flush=True)
     return 0
 

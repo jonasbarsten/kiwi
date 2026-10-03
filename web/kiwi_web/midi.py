@@ -84,8 +84,12 @@ class MidiMonitor:
     def _read(self, proc):
         for line in proc.stdout:
             event = parse_line(line)
-            if event is not None:
+            if event is None:
+                continue
+            try:
                 self.on_event(event)
+            except Exception as error:  # a bad event must not stop the monitor
+                print(f'kiwi-web: MIDI event {event} failed: {error!r}', flush=True)
         proc.wait()
         with self._lock:
             if not self._running or self._proc is not proc:

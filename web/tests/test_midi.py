@@ -71,6 +71,23 @@ class MonitorTest(unittest.TestCase):
         threading.Event().wait(0.5)
         self.assertEqual(len(events), count, 'monitor kept restarting after stop')
 
+    def test_handler_error_does_not_stop_reading(self):
+        events = []
+        done = threading.Event()
+
+        def on_event(event):
+            events.append(event)
+            if len(events) == 1:
+                raise KeyError('broken handler')
+            if len(events) == 5:
+                done.set()
+
+        script = 'import sys; sys.stdout.write(%r)' % ('\n'.join(LINES) + '\n')
+        monitor = MidiMonitor(on_event, command=[sys.executable, '-c', script])
+        monitor.start()
+        self.assertTrue(done.wait(5), 'reader stopped after a handler error')
+        monitor.stop()
+
     def test_default_command_lets_amidiminder_connect(self):
         self.assertEqual(MidiMonitor(lambda e: None).command, ['aseqdump'])
 

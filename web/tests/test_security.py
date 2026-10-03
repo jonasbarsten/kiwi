@@ -1,6 +1,6 @@
 import unittest
 
-from kiwi_web.security import is_private, same_origin
+from kiwi_web.security import host_allowed, is_private, same_origin
 
 
 class SecurityTest(unittest.TestCase):
@@ -19,6 +19,17 @@ class SecurityTest(unittest.TestCase):
         self.assertFalse(same_origin('http://evil.example', 'patchbox.local'))
         self.assertFalse(same_origin(None, 'patchbox.local'))
         self.assertFalse(same_origin('http://patchbox.local', None))
+
+    def test_host_allowlist_stops_dns_rebinding(self):
+        names = {'patchbox', 'patchbox.local', 'localhost'}
+        self.assertTrue(host_allowed('patchbox.local', '192.168.1.126', names))
+        self.assertTrue(host_allowed('192.168.1.126', '192.168.1.126', names))
+        self.assertTrue(host_allowed('192.168.0.40:80', '192.168.0.40', names))
+        self.assertTrue(host_allowed('[fe80::1]:80', 'fe80::1', names))
+        self.assertTrue(host_allowed('PATCHBOX.LOCAL', '192.168.1.126', names))
+        self.assertFalse(host_allowed('evil.example', '192.168.1.126', names))
+        self.assertFalse(host_allowed('192.168.1.99', '192.168.1.126', names))
+        self.assertFalse(host_allowed(None, '192.168.1.126', names))
 
 
 if __name__ == '__main__':

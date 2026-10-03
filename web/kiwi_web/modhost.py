@@ -17,7 +17,10 @@ def parse_response(raw):
     if not text.startswith('resp '):
         raise HostError(f'unexpected reply: {text!r}')
     code, _, value = text[5:].partition(' ')
-    return int(code), (value or None)
+    try:
+        return int(code), (value or None)
+    except ValueError as error:
+        raise HostError(f'unexpected reply: {text!r}') from error
 
 
 class HostClient:

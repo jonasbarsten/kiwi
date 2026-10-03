@@ -248,6 +248,7 @@ function makeControl(plugin, param, label) {
     };
     input.addEventListener('pointerup', release);
     input.addEventListener('pointercancel', () => { dragging = null; });
+    input.addEventListener('change', () => { if (dragging === key) dragging = null; });
     input.addEventListener('input', () => change(key, parseFloat(input.value)));
     output = document.createElement('output');
   }
@@ -306,8 +307,15 @@ function change(key, v) {
   if (!flushTimer) flushTimer = setTimeout(flush, FAST_MS);
 }
 
+let inFlight = false;
+
 async function flush() {
   flushTimer = null;
+  // One request at a time, so an earlier value can never arrive after a later one.
+  if (inFlight) {
+    flushTimer = setTimeout(flush, FAST_MS);
+    return;
+  }
   const now = performance.now();
   const changes = [];
   for (const [key, item] of pending) {
@@ -317,13 +325,16 @@ async function flush() {
       pending.delete(key);
     }
   }
-  if (pending.size) flushTimer = setTimeout(flush, FAST_MS);
+  if (pending.size && !flushTimer) flushTimer = setTimeout(flush, FAST_MS);
   if (!changes.length) return;
+  inFlight = true;
   try {
     await fetch('/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ changes }) });
   } catch (error) {
     setHost('offline');
+  } finally {
+    inFlight = false;
   }
 }
 
@@ -473,11 +484,23 @@ function apply(delta) {
   }
 }
 
+// A release outside the slider (mouse) must also end the drag, or that slider
+// would keep ignoring knob moves.
+window.addEventListener('pointerup', () => { dragging = null; });
+
 function connect() {
   if (source || !meta) return;
   source = new EventSource('/events');
   source.onmessage = (event) => apply(JSON.parse(event.data));
-  source.onerror = () => setHost('offline');
+  source.onerror = () => {
+    setHost('offline');
+    // EventSource retries by itself, except after an HTTP error (e.g. 503 when
+    // too many viewers, or the server restarting): then reconnect ourselves.
+    if (source && source.readyState === EventSource.CLOSED) {
+      source = null;
+      setTimeout(() => { if (!document.hidden) connect(); }, 2000);
+    }
+  };
 }
 
 function disconnect() {
@@ -494,14 +517,24 @@ $('reset').addEventListener('click', async () => {
   await fetch('/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 });
 
-fetch('/params.json')
-  .then((response) => response.json())
-  .then((data) => {
-    meta = data;
-    build();
-    drawSlice();
-    if (!document.hidden) connect();
-  });
+function load() {
+  fetch('/params.json')
+    .then((response) => {
+      if (!response.ok) throw new Error(`params.json: ${response.status}`);
+      return response.json();
+    })
+    .then((data) => {
+      meta = data;
+      build();
+      drawSlice();
+      if (!document.hidden) connect();
+    })
+    .catch(() => {
+      setHost('offline');
+      setTimeout(load, 2000);
+    });
+}
+load();
 </script>
 </body>
 </html>
