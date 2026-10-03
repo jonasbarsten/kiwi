@@ -69,7 +69,7 @@ of the kernel `Midi Through` device, where all MIDI sources are merged.
 | 4 | mda TalkBox | vocoder: mic on Pisound input 1 (left), carrier on right |
 | 5 | kiwi mix | per-mode volume and post-fader reverb send |
 | 6 | Dragonfly Plate | shared reverb, fully wet |
-| 7 | x42 dpl | limiter at −1 dBFS before the Pisound output |
+| 7 | x42 dpl | limiter at −1 dBFS on the dry bus (the reverb return bypasses it, see below) |
 
 To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
 (0 = channel 1). To change the sampler's root key or envelope, edit `sampler/kiwi.sfz`.
@@ -93,8 +93,11 @@ sets this through `patchbox jack config`. Findings from tuning on this Pi:
   with `multicore=1` the same chords overran.
 - `host/kiwi-stress [seconds]` plays a worst case (sustain held, alternating 8-note
   chords every 0.4 s) through a temporary virtual MIDI port and counts JACK errors.
-  5 minutes at 128 frames: 32 voices → about 6 short overruns; 24 voices → about 1.
-  Normal playing and single chords give none.
+  At 128 frames: 32 voices → about 6 short overruns in 5 minutes; 24 voices → 1–2 per
+  2 minutes; 24 voices with the reverb running in parallel to the limiter → none.
+- Every plugin in `mod-host` is its own JACK client, so each step in a serial chain
+  costs time. The reverb return goes straight to the outputs instead of through the
+  limiter, which keeps the chain one client shorter.
 
 ## Operations
 

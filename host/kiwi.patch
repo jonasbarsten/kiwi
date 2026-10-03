@@ -76,13 +76,15 @@ connect effect_1:out_right effect_5:sampler_r
 connect effect_4:left_out effect_5:vocoder_l
 connect effect_4:right_out effect_5:vocoder_r
 
-# Reverb send, then dry bus and reverb return into the limiter
+# Reverb send; the limiter guards the dry bus only. Reverb and limiter run in
+# parallel (both straight to the outputs, summed by JACK): chaining the reverb
+# into the limiter made the graph one client deeper and overran at 128 frames.
 connect effect_5:send_l effect_6:lv2_audio_in_1
 connect effect_5:send_r effect_6:lv2_audio_in_2
 connect effect_5:dry_l effect_7:inL
 connect effect_5:dry_r effect_7:inR
-connect effect_6:lv2_audio_out_1 effect_7:inL
-connect effect_6:lv2_audio_out_2 effect_7:inR
+connect effect_6:lv2_audio_out_1 system:playback_1
+connect effect_6:lv2_audio_out_2 system:playback_2
 connect effect_7:outL system:playback_1
 connect effect_7:outR system:playback_2
 

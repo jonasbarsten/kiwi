@@ -16,6 +16,9 @@ ExecStartPre=/usr/bin/jack_wait -w -t 30
 ExecStart=/usr/bin/mod-host -n -p 5555
 Restart=always
 RestartSec=2
+# mod-host's command port listens on all interfaces; only local clients may reach it.
+IPAddressAllow=localhost
+IPAddressDeny=any
 
 [Install]
 # jack.service: BindsTo stops us when JACK restarts; this starts us again with it.

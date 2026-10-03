@@ -50,6 +50,14 @@ else
     echo "Pianoteq prefs not found or without a voices setting: $prefs (run Pianoteq once, then re-run install.sh)"
 fi
 
+section "Wi-Fi power save"
+# Wi-Fi power saving causes latency spikes on the Pi; disable it on every Wi-Fi profile.
+nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" { print $1 }' |
+    while IFS= read -r wifi; do
+        sudo nmcli connection modify "$wifi" 802-11-wireless.powersave 2
+        echo "power save off: $wifi"
+    done
+
 section "JACK"
 # Patchbox owns /etc/jackdrc; set it through its CLI, and only when it differs,
 # since that restarts JACK (and with it the kiwi host).
