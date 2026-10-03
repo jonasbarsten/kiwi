@@ -16,7 +16,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import security
+from . import reverbs, security
 from .midi import MidiMonitor, describe
 from .modhost import HostClient, HostError
 from .patchfile import parse_patch
@@ -95,6 +95,23 @@ def param_name(plugin, param):
     return param['symbol'] if plugin['kind'] == 'port' else param['uri']
 
 
+def reverb_baselines(meta):
+    """{reverb id: {symbol: baseline}} for every reverb the page may load."""
+    return {r['id']: {q['symbol']: q['baseline'] for q in r['params']} for r in meta.get('reverbs', [])}
+
+
+def switch_reverb(client, reverb_id, settings):
+    """Puts a reverb into the slot through `client`. Returns the number of failed commands."""
+    entry = reverbs.find(reverb_id)
+    if entry is None:
+        return 1
+    failures = 0
+    for command in reverbs.switch_commands(entry, settings):
+        code, _ = client.command(command)
+        failures += code < 0
+    return failures
+
+
 class HostLink:
     """Owns the single mod-host connection, only while a page or a change needs it."""
 
@@ -109,9 +126,14 @@ class HostLink:
         self.port_params = [(p['instance'], q['symbol'])
                             for p in meta['plugins'] if p['kind'] == 'port' for q in p['params']]
         self.mapped = [(m['instance'], m['symbol']) for m in meta['cc_map']]
+        self.reverb_baselines = reverb_baselines(meta)
+        self.default_reverb = meta.get('default_reverb')
+        self.current_reverb = store.data.get('reverb') or self.default_reverb
+        self.model.update('reverb:current', self.current_reverb)
         self._lock = threading.Lock()
         self._sets = {}
         self._reads = set()
+        self._reverb = None
         self._reset = False
         self._viewers = 0
         self._last_need = None
@@ -140,6 +162,12 @@ class HostLink:
             self._reads.add((instance, symbol))
         self._wake.set()
 
+    def request_reverb(self, reverb_id):
+        with self._lock:
+            self._reverb = reverb_id
+            self._last_need = self.clock()
+        self._wake.set()
+
     def request_reset(self):
         with self._lock:
             self._reset = True
@@ -152,7 +180,7 @@ class HostLink:
 
     def _needed(self):
         with self._lock:
-            if self._viewers > 0 or self._sets or self._reset:
+            if self._viewers > 0 or self._sets or self._reset or self._reverb is not None:
                 return True
             return self._last_need is not None and self.clock() - self._last_need < IDLE_DISCONNECT
 
@@ -176,6 +204,7 @@ class HostLink:
                 continue
             try:
                 self._apply_reset()
+                self._apply_reverb()
                 self._apply_sets()
                 self._apply_reads()
                 now = self.clock()
@@ -205,6 +234,7 @@ class HostLink:
             self.client.connect()
             for instance, symbol in self.port_params:
                 self._read(instance, symbol)
+            self._read_reverb()
         except (OSError, HostError):
             self.model.update('status:host', 'offline')
             self._wake.wait(timeout=2.0)
@@ -218,6 +248,25 @@ class HostLink:
             self.model.update(f'port:{instance}:{symbol}', value)
         return value
 
+    def _read_reverb(self):
+        for symbol in self.reverb_baselines.get(self.current_reverb, {}):
+            self._read(reverbs.REVERB_INSTANCE, symbol)
+
+    def _load_reverb(self, reverb_id, settings):
+        """Swaps the reverb slot (the tail cuts for a moment) and reads it back."""
+        if switch_reverb(self.client, reverb_id, settings) == 0:
+            self.current_reverb = reverb_id
+            self.model.update('reverb:current', reverb_id)
+        self._read_reverb()
+
+    def _apply_reverb(self):
+        with self._lock:
+            reverb_id, self._reverb = self._reverb, None
+        if reverb_id is None or reverb_id == self.current_reverb:
+            return
+        self.store.set_reverb(reverb_id)
+        self._load_reverb(reverb_id, self.store.data['reverb_params'].get(reverb_id, {}))
+
     def _apply_reset(self):
         with self._lock:
             reset, self._reset = self._reset, False
@@ -225,9 +274,18 @@ class HostLink:
             return
         params = dict(self.store.data['params'])
         patch_params = dict(self.store.data['patch_params'])
+        tuned = dict(self.store.data['reverb_params'].get(self.current_reverb, {}))
         self.store.clear()
         with self._lock:
             self._sets.clear()
+            self._reverb = None
+        if self.current_reverb != self.default_reverb:
+            self._load_reverb(self.default_reverb, self.reverb_baselines.get(self.default_reverb, {}))
+        else:
+            for symbol in tuned:
+                baseline = self.reverb_baselines[self.current_reverb].get(symbol)
+                if baseline is not None and self.client.param_set(reverbs.REVERB_INSTANCE, symbol, baseline) == 0:
+                    self.model.update(f'port:{reverbs.REVERB_INSTANCE}:{symbol}', baseline)
         for key in params:
             instance, symbol = StateStore.split_key(key)
             baseline = self.baselines.get(('port', instance, symbol))
@@ -244,6 +302,12 @@ class HostLink:
         with self._lock:
             sets, self._sets = self._sets, {}
         for (kind, instance, name), value in sets.items():
+            if kind == 'port' and instance == reverbs.REVERB_INSTANCE:
+                baseline = self.reverb_baselines.get(self.current_reverb, {}).get(name)
+                if self.client.param_set(instance, name, value) == 0:
+                    self.model.update(f'port:{instance}:{name}', value)
+                    self.store.set_reverb_param(self.current_reverb, name, value, baseline)
+                continue
             baseline = self.baselines.get((kind, instance, name))
             if kind == 'port':
                 if self.client.param_set(instance, name, value) == 0:
@@ -272,6 +336,14 @@ def load_metadata(params_path, patch):
                 param['baseline'] = patch.baseline.get((plugin['instance'], param['symbol']), param['default'])
             else:
                 param['baseline'] = param['default']
+    meta.setdefault('reverbs', [])
+    meta.setdefault('default_reverb', None)
+    for reverb in meta['reverbs']:
+        for param in reverb['params']:
+            if reverb['id'] == meta['default_reverb']:
+                param['baseline'] = patch.baseline.get((reverbs.REVERB_INSTANCE, param['symbol']), param['default'])
+            else:
+                param['baseline'] = param['default']
     meta['cc_map'] = [vars(m) for m in patch.cc_map]
     return meta
 
@@ -283,6 +355,8 @@ class App:
         self.meta = load_metadata(args.params, patch)
         self.ranges = {(p['kind'], p['instance'], param_name(p, q)): (q['min'], q['max'])
                        for p in self.meta['plugins'] for q in p['params']}
+        self.reverb_ranges = {r['id']: {q['symbol']: (q['min'], q['max']) for q in r['params']}
+                              for r in self.meta['reverbs']}
         self.model = Model()
         self.store = StateStore(args.state, delay=args.save_delay)
         self.store.load()
@@ -333,7 +407,10 @@ class App:
                     kind, name = 'patch', str(change['uri'])
             except (KeyError, TypeError, ValueError):
                 return False
-            bounds = self.ranges.get((kind, instance, name))
+            if kind == 'port' and instance == reverbs.REVERB_INSTANCE:
+                bounds = self.reverb_ranges.get(self.link.current_reverb, {}).get(name)
+            else:
+                bounds = self.ranges.get((kind, instance, name))
             if bounds is None or not math.isfinite(value):
                 return False
             accepted.append((kind, instance, name, min(max(value, bounds[0]), bounds[1])))
@@ -442,6 +519,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/reset':
             self.app.link.request_reset()
             self._send(204)
+        elif path == '/reverb':
+            reverb_id = body.get('id') if isinstance(body, dict) else None
+            if reverb_id in self.app.reverb_ranges:
+                self.app.link.request_reverb(reverb_id)
+                self._send(204)
+            else:
+                self._send(400, b'unknown reverb\n')
         else:
             self._send(404, b'not found\n')
 
@@ -493,7 +577,16 @@ def restore(args):
     """Replays the autosaved state into mod-host (kiwi-restore.service)."""
     store = StateStore(args.state)
     data = store.load()
-    if not data['params'] and not data['patch_params']:
+    try:
+        with open(args.patch) as f:
+            meta = load_metadata(args.params, parse_patch(f.read()))
+    except (OSError, ValueError) as error:
+        print(f'kiwi-web: no parameter metadata, reverb not restored: {error}', flush=True)
+        meta = {'reverbs': [], 'default_reverb': None}
+    default_reverb = meta['default_reverb']
+    reverb_id = data['reverb'] if data['reverb'] in reverb_baselines(meta) else default_reverb
+    reverb_settings = data['reverb_params'].get(reverb_id, {}) if reverb_id else {}
+    if not data['params'] and not data['patch_params'] and reverb_id == default_reverb and not reverb_settings:
         print('kiwi-web: nothing to restore', flush=True)
         return 0
     client = HostClient(('127.0.0.1', args.host_port))
@@ -510,8 +603,17 @@ def restore(args):
     failures = 0
     total = len(data['params']) + len(data['patch_params'])
     try:
+        if reverb_id != default_reverb:
+            failures += switch_reverb(client, reverb_id, reverb_settings)
+            total += 1
+        elif reverb_settings:
+            for symbol, value in reverb_settings.items():
+                failures += client.param_set(reverbs.REVERB_INSTANCE, symbol, value) != 0
+            total += len(reverb_settings)
         for key, value in data['params'].items():
             instance, symbol = StateStore.split_key(key)
+            if instance == reverbs.REVERB_INSTANCE:
+                continue   # reverb settings live in reverb_params; this is a stale entry
             failures += client.param_set(instance, symbol, value) != 0
         for key, value in data['patch_params'].items():
             instance, uri = StateStore.split_key(key)

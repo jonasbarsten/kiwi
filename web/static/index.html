@@ -190,12 +190,19 @@ function ccFor(instance, symbol) {
   return meta.cc_map.find((m) => m.instance === instance && m.symbol === symbol);
 }
 
+// Some plugins name a port by its symbol (EQ2_FREQ): show it as words instead.
+function prettyName(param) {
+  if (param.name !== param.symbol) return param.name;
+  return param.symbol.replace(/_/g, ' ').toLowerCase().replace(/\b(rt60|eq|lf|hf|x)\b/g, (m) => m.toUpperCase())
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
 function makeControl(plugin, param, label) {
   const key = keyOf(plugin, param);
   const row = document.createElement('div');
   row.className = 'row';
   const lab = document.createElement('label');
-  lab.textContent = label || param.name;
+  lab.textContent = label || prettyName(param);
   if (plugin.kind === 'port') {
     const cc = ccFor(plugin.instance, param.symbol);
     if (cc) {
@@ -410,6 +417,8 @@ function build() {
     $('ccs').appendChild(cell);
   }
 
+  if (meta.reverbs.length) section('Reverb', buildReverbSection);
+
   for (const p of meta.plugins) {
     if (p.instance === 5 || p.instance === 3) continue;
     if (p.kind === 'patch') {
@@ -419,6 +428,51 @@ function build() {
     } else {
       section(p.title, (d) => addGrouped(d, p, p.params));
     }
+  }
+}
+
+// The reverb slot can hold any of meta.reverbs; its controls are rebuilt on a switch.
+let currentReverb = null;
+let reverbPicker = null;
+let reverbBox = null;
+
+function buildReverbSection(details) {
+  reverbPicker = document.createElement('div');
+  reverbPicker.className = 'seg';
+  for (const r of meta.reverbs) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = r.name;
+    button.dataset.id = r.id;
+    button.addEventListener('click', () => chooseReverb(r.id));
+    reverbPicker.appendChild(button);
+  }
+  const note = document.createElement('p');
+  note.className = 'note';
+  note.textContent = 'Switching cuts the reverb tail for a moment. Each reverb keeps its own settings.';
+  reverbBox = document.createElement('div');
+  details.append(reverbPicker, note, reverbBox);
+  renderReverb();
+}
+
+function renderReverb() {
+  if (!reverbBox) return;
+  for (const button of reverbPicker.children) button.classList.toggle('on', button.dataset.id === currentReverb);
+  for (const key of [...controls.keys()]) {
+    if (key.startsWith(`port:${REVERB_INSTANCE}:`)) controls.delete(key);
+  }
+  reverbBox.replaceChildren();
+  const reverb = meta.reverbs.find((r) => r.id === currentReverb);
+  if (reverb) addGrouped(reverbBox, { instance: REVERB_INSTANCE, kind: 'port', title: reverb.name }, reverb.params);
+}
+
+async function chooseReverb(id) {
+  if (id === currentReverb) return;
+  try {
+    await fetch('/reverb', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify({ id }) });
+  } catch (error) {
+    setHost('offline');
   }
 }
 
@@ -464,6 +518,11 @@ function apply(delta) {
   for (const [key, v] of Object.entries(delta)) {
     if (key.startsWith('port:') || key.startsWith('patch:')) {
       if (key !== dragging && !pending.has(key)) setValue(key, v);
+    } else if (key === 'reverb:current') {
+      if (v !== currentReverb) {
+        currentReverb = v;
+        renderReverb();
+      }
     } else if (key === 'status:host') {
       setHost(v);
     } else if (key === 'status:cpu') {

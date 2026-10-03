@@ -62,6 +62,26 @@ class StateStoreTest(unittest.TestCase):
             f.write('{not json')
         self.assertEqual(self.store.load()['params'], {})
 
+    def test_reverb_choice_and_params_per_reverb(self):
+        self.store.set_reverb('calf')
+        self.store.set_reverb_param('calf', 'decay_time', 0.9, baseline=1.5)
+        self.store.set_reverb_param('zita', 'MID_RT60', 2.0, baseline=2.0)   # equals baseline: dropped
+        self.store.flush()
+        other = StateStore(self.path)
+        other.load()
+        self.assertEqual(other.data['reverb'], 'calf')
+        self.assertEqual(other.data['reverb_params'], {'calf': {'decay_time': 0.9}})
+
+    def test_load_drops_non_finite_and_malformed(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, 'w') as f:
+            f.write('{"params": {"5:piano_vol": NaN, "junk": 0.5, "3:blend": 1.0},'
+                    ' "reverb": 7, "reverb_params": {"calf": {"x": Infinity, "y": 0.2}, "bad": 3}}')
+        data = self.store.load()
+        self.assertEqual(data['params'], {'3:blend': 1.0})
+        self.assertIsNone(data['reverb'])
+        self.assertEqual(data['reverb_params'], {'calf': {'y': 0.2}})
+
     def test_clear_removes_file(self):
         self.store.set_param(5, 'piano_vol', 0.5, baseline=0.8)
         self.store.flush()

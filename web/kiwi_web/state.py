@@ -3,12 +3,23 @@
 Writes happen at most once per `delay` seconds after the last change.
 """
 import json
+import math
 import os
 import time
 
 
 def _empty():
-    return {'params': {}, 'patch_params': {}, 'preset': None, 'favourites': []}
+    return {'params': {}, 'patch_params': {}, 'preset': None, 'favourites': [],
+            'reverb': None, 'reverb_params': {}}
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_key(key):
+    instance, sep, name = str(key).partition(':')
+    return bool(sep) and instance.isdigit() and bool(name)
 
 
 class StateStore:
@@ -35,25 +46,46 @@ class StateStore:
             for key in ('params', 'patch_params'):
                 if isinstance(loaded.get(key), dict):
                     self.data[key] = {k: float(v) for k, v in loaded[key].items()
-                                      if isinstance(v, (int, float))}
+                                      if _is_key(k) and _is_number(v)}
             if isinstance(loaded.get('preset'), str):
                 self.data['preset'] = loaded['preset']
             if isinstance(loaded.get('favourites'), list):
                 self.data['favourites'] = [u for u in loaded['favourites'] if isinstance(u, str)]
+            if isinstance(loaded.get('reverb'), str):
+                self.data['reverb'] = loaded['reverb']
+            if isinstance(loaded.get('reverb_params'), dict):
+                for reverb_id, settings in loaded['reverb_params'].items():
+                    if isinstance(reverb_id, str) and isinstance(settings, dict):
+                        kept = {s: float(v) for s, v in settings.items() if isinstance(s, str) and _is_number(v)}
+                        if kept:
+                            self.data['reverb_params'][reverb_id] = kept
         return self.data
+
+    def _touch(self):
+        self._changed_at = self.clock()
 
     def _store(self, section, key, value, baseline):
         if baseline is not None and abs(value - baseline) < 1e-6:
-            self.data[section].pop(key, None)
+            section.pop(key, None)
         else:
-            self.data[section][key] = value
-        self._changed_at = self.clock()
+            section[key] = value
+        self._touch()
 
     def set_param(self, instance, symbol, value, baseline):
-        self._store('params', f'{instance}:{symbol}', value, baseline)
+        self._store(self.data['params'], f'{instance}:{symbol}', value, baseline)
 
     def set_patch_param(self, instance, uri, value, baseline):
-        self._store('patch_params', f'{instance}:{uri}', value, baseline)
+        self._store(self.data['patch_params'], f'{instance}:{uri}', value, baseline)
+
+    def set_reverb(self, reverb_id):
+        self.data['reverb'] = reverb_id
+        self._touch()
+
+    def set_reverb_param(self, reverb_id, symbol, value, baseline):
+        settings = self.data['reverb_params'].setdefault(reverb_id, {})
+        self._store(settings, symbol, value, baseline)
+        if not settings:
+            del self.data['reverb_params'][reverb_id]
 
     def clear(self):
         self.data = _empty()

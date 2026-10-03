@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import subprocess
 import unittest
 
 HERE = os.path.dirname(__file__)
@@ -107,6 +108,33 @@ class Lv2InfoTest(unittest.TestCase):
         self.assertEqual(algorithm['type'], 'enum')
         self.assertEqual(algorithm['options'], [[0.0, 'Simple'], [1.0, 'Nested'], [2.0, 'Tank']])
         self.assertEqual(truepeak['type'], 'toggle')
+
+
+class BuildTest(unittest.TestCase):
+    def test_reverbs_listed_with_locked_settings_hidden(self):
+        from kiwi_web.patchfile import parse_patch
+        patch = parse_patch('add http://calf.sourceforge.net/plugins/Reverb 6\n')
+
+        def lv2info(uri):
+            if uri == 'http://calf.sourceforge.net/plugins/Reverb':
+                return LV2INFO.replace('amp_attack', 'decay_time').replace('algorithm', 'dry')
+            if uri == 'urn:dragonfly:plate':
+                return LV2INFO
+            raise subprocess.CalledProcessError(1, 'lv2info')   # the others are not installed
+
+        meta = gen_params.build(patch, lv2info, TTL, port_plugins=[])
+        self.assertEqual(meta['default_reverb'], 'calf')
+        ids = [r['id'] for r in meta['reverbs']]
+        self.assertEqual(ids, ['calf', 'plate'])
+        calf = meta['reverbs'][0]
+        self.assertEqual([p['symbol'] for p in calf['params']], ['decay_time', 'truepeak'])  # dry is locked
+        self.assertNotIn(6, [p['instance'] for p in meta['plugins']])
+
+    def test_default_reverb_must_be_known(self):
+        from kiwi_web.patchfile import parse_patch
+        patch = parse_patch('add urn:unknown:reverb 6\n')
+        with self.assertRaises(SystemExit):
+            gen_params.build(patch, lambda uri: LV2INFO, TTL, port_plugins=[])
 
 
 class PianoteqTest(unittest.TestCase):

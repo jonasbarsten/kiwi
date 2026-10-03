@@ -12,10 +12,14 @@ from kiwi_web.server import App, HostLink, Model, make_server, parse_args, resto
 from kiwi_web.state import StateStore
 from tests.fakehost import FakeHost
 
-PATCH = """add https://github.com/jonasbarsten/kiwi#carrier 3
+ZITA = 'http://guitarix.sourceforge.net/plugins/gx_zita_rev1_stereo#_zita_rev1_stereo'
+CALF = 'http://calf.sourceforge.net/plugins/Reverb'
+PATCH = f"""add https://github.com/jonasbarsten/kiwi#carrier 3
 add https://github.com/jonasbarsten/kiwi#mix 5
 add https://www.modartt.com/lv2/Pianoteq8 0
+add {ZITA} 6
 param_set 5 piano_vol 0.8
+param_set 6 MID_RT60 3
 midi_map 5 piano_vol 0 20 0 1
 """
 PARAMS = {'plugins': [
@@ -26,7 +30,12 @@ PARAMS = {'plugins': [
     {'instance': 0, 'title': 'Pianoteq', 'kind': 'patch', 'params': [
         {'uri': 'https://www.modartt.com/lv2/Pianoteq8:Volume', 'name': 'Volume', 'group': 'Main',
          'min': 0, 'max': 1, 'default': 0.72, 'curated': True}]},
-]}
+], 'reverbs': [
+    {'id': 'zita', 'name': 'Zita Rev1', 'uri': ZITA, 'params': [
+        {'symbol': 'MID_RT60', 'name': 'Mid RT60', 'min': 1, 'max': 8, 'default': 2, 'type': 'float'}]},
+    {'id': 'calf', 'name': 'Calf Reverb', 'uri': CALF, 'params': [
+        {'symbol': 'decay_time', 'name': 'Decay', 'min': 0.4, 'max': 15, 'default': 1.5, 'type': 'float'}]},
+], 'default_reverb': 'zita'}
 
 
 def wait_for(predicate, timeout=5.0):
@@ -50,7 +59,7 @@ class ServerTest(unittest.TestCase):
         os.mkdir(static)
         with open(os.path.join(static, 'index.html'), 'w') as f:
             f.write('<!doctype html><title>kiwi</title>')
-        self.host = FakeHost({(5, 'piano_vol'): 0.8, (3, 'blend'): 0.0})
+        self.host = FakeHost({(5, 'piano_vol'): 0.8, (3, 'blend'): 0.0, (6, 'MID_RT60'): 3.0})
         self.state_path = os.path.join(self.dir.name, 'state', 'state.json')
         args = parse_args(['--port', '0', '--host-port', str(self.host.port), '--patch', paths['kiwi.patch'],
                            '--params', paths['params.json'], '--static', static,
@@ -110,6 +119,65 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(mix['baseline'], 0.8)
         self.assertEqual(meta['plugins'][2]['params'][0]['baseline'], 0.72)
         self.assertEqual(meta['cc_map'][0]['cc'], 20)
+        self.assertEqual(meta['default_reverb'], 'zita')
+        self.assertEqual(meta['reverbs'][0]['params'][0]['baseline'], 3.0)   # patch value for the default reverb
+        self.assertEqual(meta['reverbs'][1]['params'][0]['baseline'], 1.5)   # plugin default for the others
+
+    def read_until(self, response, key):
+        snapshot = {}
+        while key not in snapshot:
+            snapshot.update(self.read_event(response))
+        return snapshot
+
+    def test_switch_reverb(self):
+        conn, response = self.open_events()
+        self.assertEqual(self.read_until(response, 'reverb:current')['reverb:current'], 'zita')
+        status, _ = self.request('POST', '/reverb', {'id': 'calf'})
+        self.assertEqual(status, 204)
+        self.assertEqual(self.read_until(response, 'reverb:current')['reverb:current'], 'calf')
+        start = self.host.log.index('remove 6')
+        self.assertEqual(self.host.log[start:start + 8], [
+            'remove 6', f'add {CALF} 6', 'param_set 6 dry 0.000000', 'param_set 6 on 1.000000',
+            'connect effect_5:send_l effect_6:in_l', 'connect effect_5:send_r effect_6:in_r',
+            'connect effect_6:out_l system:playback_1', 'connect effect_6:out_r system:playback_2'])
+        self.assertIn('param_get 6 decay_time', self.host.log[start + 8:])
+        self.assertTrue(wait_for(lambda: os.path.exists(self.state_path)))
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f)['reverb'], 'calf')
+        conn.close()
+
+    def test_reverb_params_follow_the_current_reverb(self):
+        self.request('POST', '/reverb', {'id': 'calf'})
+        self.assertTrue(wait_for(lambda: self.host.instances.get(6) == CALF))
+        status, _ = self.request('POST', '/set', {'changes': [{'instance': 6, 'symbol': 'MID_RT60', 'value': 2}]})
+        self.assertEqual(status, 400, 'a zita parameter must be refused while calf is loaded')
+        status, _ = self.request('POST', '/set', {'changes': [{'instance': 6, 'symbol': 'decay_time', 'value': 0.9}]})
+        self.assertEqual(status, 204)
+        self.assertTrue(wait_for(lambda: self.host.params.get((6, 'decay_time')) == 0.9))
+        self.assertTrue(wait_for(lambda: os.path.exists(self.state_path)))
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f)['reverb_params'], {'calf': {'decay_time': 0.9}})
+        # Switching back and forth brings the tuned setting back with its reverb.
+        self.request('POST', '/reverb', {'id': 'zita'})
+        self.assertTrue(wait_for(lambda: self.host.instances.get(6) == ZITA))
+        self.request('POST', '/reverb', {'id': 'calf'})
+        self.assertTrue(wait_for(lambda: self.host.params.get((6, 'decay_time')) == 0.9))
+
+    def test_unknown_reverb_rejected(self):
+        status, _ = self.request('POST', '/reverb', {'id': 'nope'})
+        self.assertEqual(status, 400)
+        self.assertNotIn('remove 6', self.host.log)
+
+    def test_reset_returns_to_default_reverb(self):
+        self.request('POST', '/reverb', {'id': 'calf'})
+        self.assertTrue(wait_for(lambda: self.host.instances.get(6) == CALF))
+        self.request('POST', '/set', {'changes': [{'instance': 6, 'symbol': 'decay_time', 'value': 0.9}]})
+        self.assertTrue(wait_for(lambda: self.host.params.get((6, 'decay_time')) == 0.9))
+        status, _ = self.request('POST', '/reset', {})
+        self.assertEqual(status, 204)
+        self.assertTrue(wait_for(lambda: self.host.instances.get(6) == ZITA))
+        self.assertTrue(wait_for(lambda: self.host.params.get((6, 'MID_RT60')) == 3.0))
+        self.assertTrue(wait_for(lambda: not os.path.exists(self.state_path)))
 
     def test_events_snapshot_then_set(self):
         conn, response = self.open_events()
@@ -218,6 +286,28 @@ class UnitsReadyTest(unittest.TestCase):
 
 
 class RestoreTest(unittest.TestCase):
+    def test_restores_reverb_choice_and_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {}
+            for name, content in [('kiwi.patch', PATCH), ('params.json', json.dumps(PARAMS))]:
+                paths[name] = os.path.join(tmp, name)
+                with open(paths[name], 'w') as f:
+                    f.write(content)
+            state = os.path.join(tmp, 'state.json')
+            with open(state, 'w') as f:
+                # '6:decay' is a stale entry from before per-reverb settings: it must be ignored.
+                json.dump({'params': {'5:piano_vol': 0.3, '6:decay': 1.6}, 'reverb': 'calf',
+                           'reverb_params': {'calf': {'decay_time': 0.9}}}, f)
+            host = FakeHost({(5, 'piano_vol'): 0.8, (6, 'MID_RT60'): 3.0})
+            args = parse_args(['--state', state, '--host-port', str(host.port),
+                               '--patch', paths['kiwi.patch'], '--params', paths['params.json']])
+            self.assertEqual(restore(args), 0)
+            self.assertEqual(host.instances.get(6), CALF)
+            self.assertEqual(host.params.get((6, 'decay_time')), 0.9)
+            self.assertEqual(host.params.get((5, 'piano_vol')), 0.3)
+            self.assertNotIn('param_set 6 decay 1.600000', host.log)
+            host.close()
+
     def test_lost_connection_is_logged_not_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = os.path.join(tmp, 'state.json')

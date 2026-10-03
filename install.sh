@@ -21,7 +21,7 @@ hostnamectl --static
 section "Packages"
 # Only touch apt (which needs internet) when something is missing: in hotspot
 # mode the Pi has no internet connection.
-packages="dragonfly-reverb x42-plugins lilv-utils cmake build-essential lv2-dev"
+packages="dragonfly-reverb guitarix-lv2 mda-lv2 calf-plugins x42-plugins lilv-utils cmake build-essential lv2-dev"
 # shellcheck disable=SC2086
 if ! dpkg -s $packages >/dev/null 2>&1; then
     sudo apt-get update -qq

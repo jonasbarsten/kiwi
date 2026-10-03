@@ -126,6 +126,19 @@ player hears the change: at most every 150 ms for Pianoteq and the reverb (both 
 inside the audio thread on each change), every 50 ms for everything else; the final value is
 always sent.
 
+### 4.1 Reverb choice (added 2026-10-03)
+
+The reverb slot (instance 6) can hold one of several reverbs, listed in
+`web/kiwi_web/reverbs.py` with their stereo ports and the settings that keep them fully
+wet (applied on every load, hidden from the page). Switching sends
+`remove 6`, `add <uri> 6`, the locked settings, the reverb's saved settings and the four
+connections (send bus in, outputs out): the tail cuts for a moment, the dry path is
+unaffected. `params.json` carries `reverbs` (each with its parameters) and
+`default_reverb` (the one `kiwi.patch` loads). Each reverb's settings are autosaved
+separately (`reverb_params`), the choice as `reverb`; `kiwi-restore` performs the switch
+at boot. Parameter changes for instance 6 are validated against the current reverb.
+`kiwi-check` matches the reverb's connections by instance, not port name.
+
 ## 5. Pianoteq presets
 
 - **Export** (one-time, `install.sh`): the Pianoteq standalone exports all presets as LV2

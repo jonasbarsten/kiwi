@@ -7,7 +7,7 @@ add http://code.google.com/p/amsynth/amsynth 2
 add https://github.com/jonasbarsten/kiwi#carrier 3
 add http://moddevices.com/plugins/mda/TalkBox 4
 add https://github.com/jonasbarsten/kiwi#mix 5
-add urn:dragonfly:plate 6
+add http://guitarix.sourceforge.net/plugins/gx_zita_rev1_stereo#_zita_rev1_stereo 6
 add http://gareus.org/oss/lv2/dpl#stereo 7
 
 # Pianoteq: its own reverb off (we have a shared reverb)
@@ -41,11 +41,11 @@ param_set 4 wet 100
 param_set 4 dry 0
 param_set 4 quality 100
 
-# Reverb: Dragonfly Plate, fully wet on the send bus. (Dragonfly Room overran
-# its JACK deadline every 32768 frames whenever signal reached it, at 128 frames.)
-param_set 6 dry_level 0
-param_set 6 early_level 30
-param_set 6 decay 1.6
+# Reverb: Zita Rev1, fully wet on the send bus. The web UI can swap other reverbs
+# into this slot (web/kiwi_web/reverbs.py lists them with their ports). Dragonfly
+# Room overran its JACK deadline every 32768 frames at 128 frames; Aether and
+# ZamVerb are too heavy.
+param_set 6 DRY_WET_MIX 1
 
 # Limiter at -1 dBFS
 param_set 7 threshold -1
@@ -79,12 +79,12 @@ connect effect_4:right_out effect_5:vocoder_r
 # Reverb send; the limiter guards the dry bus only. Reverb and limiter run in
 # parallel (both straight to the outputs, summed by JACK): chaining the reverb
 # into the limiter made the graph one client deeper and overran at 128 frames.
-connect effect_5:send_l effect_6:lv2_audio_in_1
-connect effect_5:send_r effect_6:lv2_audio_in_2
+connect effect_5:send_l effect_6:in
+connect effect_5:send_r effect_6:in1
 connect effect_5:dry_l effect_7:inL
 connect effect_5:dry_r effect_7:inR
-connect effect_6:lv2_audio_out_1 system:playback_1
-connect effect_6:lv2_audio_out_2 system:playback_2
+connect effect_6:out system:playback_1
+connect effect_6:out1 system:playback_2
 connect effect_7:outL system:playback_1
 connect effect_7:outR system:playback_2
 

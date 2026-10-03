@@ -12,6 +12,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+from kiwi_web import reverbs  # noqa: E402
 from kiwi_web.patchfile import parse_patch  # noqa: E402
 
 LV2_PATH = '/home/patch/.lv2:/usr/local/lib/lv2:/usr/lib/lv2:/var/modep/lv2'
@@ -20,10 +21,10 @@ PIANOTEQ_PREFIX = 'https://www.modartt.com/lv2/Pianoteq8:'
 
 # instance, title, only these symbols (None = all), never these symbols.
 # Routing-critical parameters are left out so the UI cannot change them.
+# The reverb slot (6) is described separately: see kiwi_web.reverbs.
 PORT_PLUGINS = [
     (5, 'Mix', None, set()),
     (3, 'Vocoder carrier', None, set()),
-    (6, 'Reverb', None, {'dry_level'}),
     (7, 'Limiter', None, {'enable'}),
     (4, 'Vocoder', {'quality'}, set()),
     (1, 'Sampler', {'volume', 'tuning_frequency', 'stretched_tuning', 'sustain_cancels_release',
@@ -106,19 +107,35 @@ def parse_pianoteq_ttl(text):
     return params
 
 
-def build(patch, lv2info, pianoteq_ttl):
+def build(patch, lv2info, pianoteq_ttl, port_plugins=PORT_PLUGINS):
     plugins = []
-    for instance, title, only, never in PORT_PLUGINS:
+    for instance, title, only, never in port_plugins:
         params = [p for p in parse_lv2info(lv2info(patch.instances[instance]))
                   if (only is None or p['symbol'] in only) and p['symbol'] not in never]
         plugins.append({'instance': instance, 'title': title, 'kind': 'port', 'params': params})
+    default = reverbs.find_by_uri(patch.instances.get(reverbs.REVERB_INSTANCE))
+    if default is None:
+        sys.exit(f'gen_params: the reverb in kiwi.patch (instance {reverbs.REVERB_INSTANCE}) '
+                 'is not listed in kiwi_web/reverbs.py')
+    choices = []
+    for entry in reverbs.REVERBS:
+        try:
+            ports = parse_lv2info(lv2info(entry['uri']))
+        except subprocess.CalledProcessError:
+            if entry is default:
+                sys.exit(f"gen_params: default reverb {entry['uri']} is not installed")
+            print(f"gen_params: reverb {entry['id']} not installed, skipped", file=sys.stderr)
+            continue
+        locked = {symbol for symbol, _ in entry['locked']}
+        choices.append({'id': entry['id'], 'name': entry['name'], 'uri': entry['uri'],
+                        'params': [p for p in ports if p['symbol'] not in locked]})
     pianoteq = [dict(p, curated=p['name'] in PIANOTEQ_CURATED)
                 for p in parse_pianoteq_ttl(pianoteq_ttl) if p['name'] not in PIANOTEQ_EXCLUDED]
     missing = set(PIANOTEQ_CURATED) - {p['name'] for p in pianoteq}
     for name in sorted(missing):
         print(f'gen_params: curated Pianoteq parameter not found: {name}', file=sys.stderr)
     plugins.append({'instance': PIANOTEQ_INSTANCE, 'title': 'Pianoteq', 'kind': 'patch', 'params': pianoteq})
-    return {'plugins': plugins}
+    return {'plugins': plugins, 'reverbs': choices, 'default_reverb': default['id']}
 
 
 def run_lv2info(uri):

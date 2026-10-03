@@ -69,7 +69,7 @@ of the kernel `Midi Through` device, where all MIDI sources are merged.
 | 3 | kiwi carrier | blends synth / piano / sampler into the carrier |
 | 4 | mda TalkBox | vocoder: mic on Pisound input 1 (left), carrier on right |
 | 5 | kiwi mix | per-mode volume and post-fader reverb send |
-| 6 | Dragonfly Plate | shared reverb, fully wet |
+| 6 | Zita Rev1 (default; switchable, see Web UI) | shared reverb, fully wet |
 | 7 | x42 dpl | limiter at −1 dBFS on the dry bus (the reverb return bypasses it, see below) |
 
 To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
@@ -86,8 +86,12 @@ JACK runs at 48 kHz, 128 frames, 2 periods (about 5.3 ms output latency); `insta
 sets this through `patchbox jack config`. Findings from tuning on this Pi:
 
 - **Dragonfly Room is not usable at 128 frames here**: whenever signal reaches it, it
-  overruns its deadline every 32768 frames (a steady glitch at ~88 bpm). Dragonfly Plate
-  does not, so the shared reverb is a Plate.
+  overruns its deadline every 32768 frames (a steady glitch at ~88 bpm). Measured under
+  `kiwi-stress` (45 s, average JACK DSP load; the instrument without a reverb sits at ~50 %):
+  MDA Ambience 50.5 % and Guitarix Reverb 52.1 % and Calf Reverb 52.5 % and Zita Rev1 53.7 %
+  and Dragonfly Plate 56.6 % all with 0 xruns; Dragonfly Hall 60 % with a few; Aether 66 %
+  and ZamVerb 60 % with many. The first five are the choices offered in the web UI;
+  Zita Rev1 is the default in `kiwi.patch`.
 - `mod-host`'s `bypass` does not stop every plugin's processing, so bypassing is not a
   reliable way to find which plugin is expensive; disconnecting its input is.
 - Pianoteq with `multicore=2` absorbs dense chords with the sustain pedal held;
@@ -110,7 +114,11 @@ a full-screen app.
   Moving a physical knob moves the slider.
 - **MIDI in**: a kiwi slice whose seeds light up per pitch class, the last event, and bars for
   CC 20–26. Header: audio host status, JACK DSP load, CPU temperature, MIDI activity.
-- **Sections**: reverb, limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
+- **Reverb**: a picker swaps the shared reverb live (Zita Rev1, Calf Reverb, MDA Ambience,
+  Guitarix Reverb, Dragonfly Plate: `web/kiwi_web/reverbs.py`). The tail cuts for a moment;
+  the dry sound is untouched. Each reverb keeps its own settings, and the choice is
+  autosaved and restored at boot. Reset returns to the `kiwi.patch` reverb.
+- **Sections**: limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
   (curated) and Pianoteq (all parameters). Routing-critical settings are not offered.
   Pianoteq values show "–" until set from the page (mod-host cannot read them back).
   Sliders apply while you drag: Pianoteq and reverb changes at most every 150 ms (they
