@@ -173,12 +173,33 @@ expensive inside the audio thread).
 - Budget: idle ~0 CPU, ~18 MB RAM; with viewers < 1 % of one core at SCHED_IDLE, ~2–25
   mod-host commands/s, 1–3 KB/s network.
 
+### Mobile first
+
+The page is designed for a phone in portrait first (360–430 px wide); tablet and desktop
+layouts are progressive enhancements via `min-width` media queries.
+
+- `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">`,
+  safe-area insets respected, no horizontal scrolling at 360 px.
+- Touch targets at least 44 × 44 px; sliders have a 44 px tall hit area with a large
+  seed-shaped thumb; no control depends on hover.
+- Phone layout is a single column: header (status) → preset bar → the seven knob controls
+  (three mode cards stacked, each with volume + reverb as horizontal sliders, then carrier
+  blend) → MIDI monitor → collapsible sections. Two or three columns from 768 px.
+- Sliders use `touch-action: none` on the slider only, so the page still scrolls when you
+  drag outside a slider; a value is applied on drag, with a double-tap reset to the patch value.
+- Prev/next preset buttons sit within thumb reach and are large (≥ 56 px).
+- Works as a home-screen web app (`apple-mobile-web-app-capable`, theme colour), still a
+  single file: the manifest and icon are inline/data URIs.
+- Text at least 16 px (no iOS zoom on focus); high contrast for dark stages.
+
 ### Theme
 
 Kiwi fruit, dark stage mode: skin brown `#5B3A1E` / fuzz `#8A6A45` frame, flesh green
 `#8DC63F`→`#C5E17A` fills, cream core `#F3F0D7` text, seed black `#1E1A14` slider thumbs
 (seed-shaped). The carrier blend sits on a kiwi cross-section; the MIDI monitor is a kiwi slice
 whose 12 seeds (one per pitch class) light with incoming notes. No blur or shadow filters.
+
+Desktop/tablet layout (the phone layout stacks the same blocks in one column):
 
 ```
 ┌──────────────────── kiwi ●  cpu 41%  48°C  midi ● ┐
@@ -205,6 +226,8 @@ whose 12 seeds (one per pitch class) light with incoming notes. No blur or shado
   mid-reply, reconnect on EOF); `kiwi.patch` parsing (instances, `midi_map` lines); aseqdump
   line parsing; state store (debounce, atomic write, diff against the patch); request filters
   (private-address check, Origin check).
+- **Layout**: check at 360 × 740 (phone portrait), 740 × 360 (landscape), 768 and 1280 px
+  wide in a browser: no horizontal scroll, all controls reachable, targets ≥ 44 px.
 - **On device**: `kiwi-stress 600` with two pages open → 0 xruns; `kiwi-check` stays clean;
   CPU/RAM of `kiwi-web` idle and with viewers; reboot restores autosaved state; `kiwi-host`
   restart → page reconnects and restores; knob CC → page within 200 ms.
