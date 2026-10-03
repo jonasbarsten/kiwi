@@ -10,5 +10,9 @@ SwiftCrossCompilers/
 plugins/kiwi/build/
 legacy/swift_kiwi/.build/
 
+# Web UI
+web/params.json
+__pycache__/
+
 # Plan execution scratch
 .superpowers/
