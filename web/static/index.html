@@ -50,11 +50,16 @@ main {
 .mode { border-top: 1px solid var(--line); padding-top: 6px; }
 .mode:first-child { border-top: 0; padding-top: 0; }
 .mode h3 { margin: 0; font-size: 17px; }
-.row { display: grid; grid-template-columns: minmax(5.5em, 8em) 1fr 3.4em; align-items: center; gap: 10px; min-height: 48px; }
-.row.choice { grid-template-columns: minmax(5.5em, 8em) 1fr; }
-.row label { font-size: 16px; overflow-wrap: anywhere; }
-.row label small { display: block; font-size: 12px; color: var(--muted); }
-.row output { text-align: right; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Mobile first: label and value on one line, the control full width below it. */
+.row {
+  display: grid; grid-template-columns: 1fr auto; grid-template-areas: "label value" "control control";
+  align-items: center; column-gap: 10px; padding-top: 6px;
+}
+.row label { grid-area: label; font-size: 16px; overflow-wrap: anywhere; }
+.row label small { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.row output { grid-area: value; text-align: right; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row > input, .row > .seg, .row > select { grid-area: control; }
+.row.choice > .seg, .row.choice > select { margin: 4px 0 6px; }
 .row.differs label::before { content: "● "; color: var(--flesh); font-size: 12px; }
 .row.unknown output { color: var(--fuzz); }
 input[type=range] {
@@ -78,7 +83,7 @@ input[type=range]::-moz-range-thumb {
 }
 .unknown input[type=range]::-webkit-slider-thumb { opacity: .45; }
 .unknown input[type=range]::-moz-range-thumb { opacity: .45; }
-.blend-labels { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin: -6px 0 0; }
+.blend-labels { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin: -8px 0 0; }
 .seg { display: flex; flex-wrap: wrap; gap: 6px; }
 button, select {
   font: inherit; font-size: 16px; min-height: 44px; min-width: 44px; border-radius: 12px;
@@ -280,6 +285,17 @@ function setValue(key, v) {
   if (control) render(control);
 }
 
+// Changes are sent while dragging, at most every FAST_MS. Pianoteq and the reverb
+// recompute inside the audio thread on every change, so they get SLOW_MS.
+const FAST_MS = 50;
+const SLOW_MS = 150;
+const REVERB_INSTANCE = 6;
+const lastSent = new Map();
+
+function interval(control) {
+  return control.plugin.kind === 'patch' || control.plugin.instance === REVERB_INSTANCE ? SLOW_MS : FAST_MS;
+}
+
 function change(key, v) {
   const control = controls.get(key);
   setValue(key, v);
@@ -287,13 +303,21 @@ function change(key, v) {
   if (control.plugin.kind === 'port') item.symbol = control.param.symbol;
   else item.uri = control.param.uri;
   pending.set(key, item);
-  if (!flushTimer) flushTimer = setTimeout(flush, 50);
+  if (!flushTimer) flushTimer = setTimeout(flush, FAST_MS);
 }
 
 async function flush() {
   flushTimer = null;
-  const changes = [...pending.values()];
-  pending.clear();
+  const now = performance.now();
+  const changes = [];
+  for (const [key, item] of pending) {
+    if (now - (lastSent.get(key) || 0) >= interval(controls.get(key))) {
+      changes.push(item);
+      lastSent.set(key, now);
+      pending.delete(key);
+    }
+  }
+  if (pending.size) flushTimer = setTimeout(flush, FAST_MS);
   if (!changes.length) return;
   try {
     await fetch('/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },

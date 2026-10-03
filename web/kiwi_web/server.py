@@ -68,9 +68,12 @@ def read_temperature(path='/sys/class/thermal/thermal_zone0/temp'):
         return None
 
 
-def systemd_units_ready():
-    result = subprocess.run(['systemctl', 'is-active', '--quiet', 'kiwi-patch', 'kiwi-restore'])
-    return result.returncode == 0
+def systemd_units_ready(run=subprocess.run):
+    # `systemctl is-active a b` exits 0 when ANY unit is active, so check every state line.
+    result = run(['systemctl', 'is-active', 'kiwi-patch', 'kiwi-restore'],
+                 capture_output=True, text=True)
+    states = result.stdout.split()
+    return len(states) == 2 and all(state == 'active' for state in states)
 
 
 def param_name(plugin, param):

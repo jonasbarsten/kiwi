@@ -1,10 +1,14 @@
 """Incoming MIDI monitor: parses `aseqdump` output for the Midi Through port.
 
-The aseqdump child only runs while a page is open.
+The aseqdump child only runs while a page is open. It does not subscribe to
+Midi Through itself: amidiminder connects it (rule `Midi Through --> aseqdump`).
+When aseqdump subscribed itself with `-p`, amidiminder's "restore prior
+connection" could win the race and aseqdump exited with "resource busy".
 """
 import re
 import subprocess
 import threading
+import time
 
 _LINE = re.compile(
     r'^\s*\d+:\d+\s+(Note on|Note off|Control change|Pitch bend|Program change)\s+(\d+),\s*(.*)$')
@@ -44,22 +48,30 @@ def describe(event):
 
 
 class MidiMonitor:
-    def __init__(self, on_event, port='Midi Through', command=None):
+    """Runs the monitor child while started, restarting it if it exits on its own."""
+
+    def __init__(self, on_event, command=None, restart_delay=1.0):
         self.on_event = on_event
-        self.command = command or ['aseqdump', '-p', port]
+        self.command = command or ['aseqdump']
+        self.restart_delay = restart_delay
         self._proc = None
+        self._running = False
         self._lock = threading.Lock()
 
     def start(self):
         with self._lock:
-            if self._proc is not None:
-                return
-            self._proc = subprocess.Popen(self.command, stdout=subprocess.PIPE,
-                                          stderr=subprocess.DEVNULL, text=True, bufsize=1)
-            threading.Thread(target=self._read, args=(self._proc,), daemon=True).start()
+            self._running = True
+            if self._proc is None:
+                self._spawn()
+
+    def _spawn(self):
+        self._proc = subprocess.Popen(self.command, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        threading.Thread(target=self._read, args=(self._proc,), daemon=True).start()
 
     def stop(self):
         with self._lock:
+            self._running = False
             proc, self._proc = self._proc, None
         if proc is None:
             return
@@ -74,3 +86,12 @@ class MidiMonitor:
             event = parse_line(line)
             if event is not None:
                 self.on_event(event)
+        proc.wait()
+        with self._lock:
+            if not self._running or self._proc is not proc:
+                return
+            self._proc = None
+        time.sleep(self.restart_delay)
+        with self._lock:
+            if self._running and self._proc is None:
+                self._spawn()

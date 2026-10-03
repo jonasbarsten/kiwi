@@ -53,6 +53,27 @@ class MonitorTest(unittest.TestCase):
         monitor.stop()
         self.assertEqual([e['type'] for e in events], ['cc', 'note_on', 'note_off', 'bend', 'program'])
 
+    def test_restarts_child_that_exits(self):
+        events = []
+        twice = threading.Event()
+
+        def on_event(event):
+            events.append(event)
+            if len(events) >= 2:
+                twice.set()
+
+        script = 'import sys; sys.stdout.write(%r)' % (LINES[3] + '\n')
+        monitor = MidiMonitor(on_event, command=[sys.executable, '-c', script], restart_delay=0.1)
+        monitor.start()
+        self.assertTrue(twice.wait(5), 'monitor did not restart its child')
+        monitor.stop()
+        count = len(events)
+        threading.Event().wait(0.5)
+        self.assertEqual(len(events), count, 'monitor kept restarting after stop')
+
+    def test_default_command_lets_amidiminder_connect(self):
+        self.assertEqual(MidiMonitor(lambda e: None).command, ['aseqdump'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,3 +2,6 @@
 .hw --> Midi Through
 rtpmidid --> Midi Through
 Midi Through -x-> Midi Through
+# The web UI's MIDI monitor (aseqdump, started without -p) is connected here, so
+# amidiminder is the only one making that connection.
+Midi Through --> aseqdump

@@ -93,5 +93,15 @@ for unit in fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.s
     sudo systemctl --global mask "$unit"
 done
 
+section "Web UI"
+python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"
+mv "$KIWI_DIR/web/params.json.tmp" "$KIWI_DIR/web/params.json"
+mkdir -p "$HOME/.local/state/kiwi"
+sudo install -m 644 "$KIWI_DIR/system/kiwi-web.service" "$KIWI_DIR/system/kiwi-restore.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable kiwi-restore kiwi-web
+sudo systemctl start kiwi-restore
+sudo systemctl restart kiwi-web
+
 echo
 echo "kiwi install done"

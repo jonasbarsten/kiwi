@@ -1,0 +1,13 @@
+[Unit]
+Description=Kiwi autosaved state restore
+After=kiwi-patch.service
+BindsTo=kiwi-host.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=patch
+ExecStart=/usr/bin/python3 /home/patch/kiwi/web/kiwi-web --restore
+
+[Install]
+WantedBy=kiwi-host.service

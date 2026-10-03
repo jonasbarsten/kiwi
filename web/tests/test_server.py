@@ -8,7 +8,7 @@ import time
 import unittest
 
 from kiwi_web.modhost import HostClient
-from kiwi_web.server import App, HostLink, Model, make_server, parse_args
+from kiwi_web.server import App, HostLink, Model, make_server, parse_args, systemd_units_ready
 from kiwi_web.state import StateStore
 from tests.fakehost import FakeHost
 
@@ -144,6 +144,18 @@ class ServerTest(unittest.TestCase):
         status, _ = self.request('POST', '/set', {'changes': []}, origin=False)
         self.assertEqual(status, 403)
 
+    def test_cc_move_is_autosaved(self):
+        conn, response = self.open_events()
+        snapshot = {}
+        while 'port:5:piano_vol' not in snapshot:
+            snapshot.update(self.read_event(response))
+        self.host.params[(5, 'piano_vol')] = 0.3     # the knob moved the value inside mod-host
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 20, 'value': 38})
+        self.assertTrue(wait_for(lambda: os.path.exists(self.state_path)))
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f)['params'], {'5:piano_vol': 0.3})
+        conn.close()
+
     def test_reset_restores_baseline(self):
         self.request('POST', '/set', {'changes': [{'instance': 5, 'symbol': 'piano_vol', 'value': 0.3}]})
         self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - 0.3) < 1e-6))
@@ -151,6 +163,25 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - 0.8) < 1e-6))
         self.assertTrue(wait_for(lambda: not os.path.exists(self.state_path)))
+
+
+class UnitsReadyTest(unittest.TestCase):
+    """`systemctl is-active a b` succeeds when ANY unit is active; we need ALL."""
+
+    def fake_run(self, states):
+        class Result:
+            stdout = ''.join(f'{s}\n' for s in states)
+            returncode = 0 if 'active' in states else 3
+        return lambda *args, **kwargs: Result()
+
+    def test_all_active(self):
+        self.assertTrue(systemd_units_ready(run=self.fake_run(['active', 'active'])))
+
+    def test_one_still_activating(self):
+        self.assertFalse(systemd_units_ready(run=self.fake_run(['active', 'activating'])))
+
+    def test_none_active(self):
+        self.assertFalse(systemd_units_ready(run=self.fake_run(['inactive', 'inactive'])))
 
 
 class LinkTest(unittest.TestCase):
