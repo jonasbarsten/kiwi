@@ -18,7 +18,7 @@ Implementation plan: [`docs/superpowers/plans/2026-09-29-kiwi.md`](docs/superpow
 ## Hardware
 
 - Raspberry Pi 4 Model B (8 GB), Pisound 2020 v1.1, Patchbox OS (Debian 12 bookworm).
-- Host `patch@192.168.1.126`.
+- Host name `kiwi` (`kiwi.local` over mDNS); SSH `patch@192.168.1.126` on the wired LAN.
 - MIDI from the Pisound DIN input, any USB MIDI device, or RTP-MIDI over the network.
   All of them are merged automatically; nothing needs patching by hand.
 - A mic for the vocoder needs a preamp in front of the Pisound input (line/instrument level).
@@ -102,8 +102,8 @@ sets this through `patchbox jack config`. Findings from tuning on this Pi:
 
 ## Web UI
 
-Open **http://patchbox.local/** (or `http://192.168.1.126/`, or the Wi-Fi address) on a phone
-or computer on the same network. It is mobile first; on a phone, "Add to Home Screen" makes it
+Open **http://kiwi.local/** (or `http://192.168.1.126/` on the wired LAN, or `http://10.42.0.1/`
+on the kiwi hotspot) on a phone or computer. It is mobile first; on a phone, "Add to Home Screen" makes it
 a full-screen app.
 
 - **Mix**: volume and reverb per mode, and the vocoder carrier blend, with their CC numbers.
@@ -157,9 +157,39 @@ To undo: `sudo systemctl set-default graphical.target`, `sudo patchbox module ac
 `sudo systemctl enable <unit>` for anything wanted back, and
 `sudo systemctl --global unmask fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service`.
 
-Network: the Pi reaches the internet over Wi-Fi; the wired LAN (`192.168.1.126`) is kept
-for SSH only (`ipv4.never-default` on the wired connection). The Patchbox hotspot
-(`pb-hotspot`) has autoconnect off. These were set by hand, not by `install.sh`.
+## Network
+
+- **Wired LAN**: `192.168.1.126` (SSH, web UI, RTP-MIDI). It never takes the default route
+  (`ipv4.never-default` on "Wired connection 1"); that LAN has no internet.
+- **Wi-Fi hotspot (default)**: SSID **kiwi**, WPA2. Phones join it directly and open
+  `http://kiwi.local/` or `http://10.42.0.1/`. NetworkManager connection `kiwi-hotspot`
+  (`ipv4.method shared`: the Pi hands out `10.42.0.x` addresses). In this mode the Pi has no
+  internet.
+- **Wi-Fi client (for development)**: joins an existing network ("internett") for internet,
+  e.g. to install packages. The radio does one or the other.
+
+Switch with `host/kiwi-wifi`:
+
+```bash
+~/kiwi/host/kiwi-wifi client      # join "internett" (internet for installs); persists across reboots
+~/kiwi/host/kiwi-wifi hotspot     # back to the kiwi hotspot (the default)
+~/kiwi/host/kiwi-wifi status
+```
+
+Do this over the wired LAN: switching drops whatever is connected over Wi-Fi.
+`install.sh` only needs internet when a package or the sfizz build is missing.
+
+These connections were created by hand (the passwords are not in the repo), e.g.:
+
+```bash
+sudo nmcli connection add type wifi ifname wlan0 con-name kiwi-hotspot autoconnect no ssid kiwi \
+  802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 6 \
+  802-11-wireless.powersave 2 ipv4.method shared ipv6.method disabled \
+  wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp \
+  wifi-sec.psk '<password>'
+```
+
+The Patchbox hotspot (`pb-hotspot`) is left in place with autoconnect off.
 
 ## Development
 

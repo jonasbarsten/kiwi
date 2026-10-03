@@ -8,9 +8,25 @@ RTPMIDID_DEB_VERSION="24.12~1~g66d57"
 
 section() { printf '\n== %s\n' "$1"; }
 
+section "Hostname"
+# The device answers as kiwi.local (avahi follows the hostname; rtpmidid announces it).
+if [ "$(hostnamectl --static)" != "kiwi" ]; then
+    # /etc/hosts first, so sudo can resolve the new name.
+    sudo sed -i 's/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t\tkiwi/' /etc/hosts
+    sudo hostnamectl set-hostname kiwi
+    sudo systemctl restart avahi-daemon
+fi
+hostnamectl --static
+
 section "Packages"
-sudo apt-get update -qq
-sudo apt-get install -y -qq dragonfly-reverb x42-plugins lilv-utils cmake build-essential lv2-dev
+# Only touch apt (which needs internet) when something is missing: in hotspot
+# mode the Pi has no internet connection.
+packages="dragonfly-reverb x42-plugins lilv-utils cmake build-essential lv2-dev"
+# shellcheck disable=SC2086
+if ! dpkg -s $packages >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq $packages
+fi
 
 section "sfizz"
 "$KIWI_DIR/system/build-sfizz.sh"

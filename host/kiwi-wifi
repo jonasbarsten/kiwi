@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Switches the Pi's single Wi-Fi radio between the "kiwi" hotspot (the default, for
+# playing: phones connect directly) and a client connection to an existing network
+# (for internet access while developing). The wired LAN is unaffected either way.
+#
+# Usage: kiwi-wifi hotspot | client [connection] | status
+#   connection defaults to "internett" (a NetworkManager connection name).
+set -euo pipefail
+
+HOTSPOT=kiwi-hotspot
+mode=${1:-status}
+client=${2:-internett}
+
+case "$mode" in
+    hotspot)
+        sudo nmcli connection modify "$client" connection.autoconnect no
+        sudo nmcli connection modify "$HOTSPOT" connection.autoconnect yes
+        sudo nmcli connection up "$HOTSPOT"
+        ;;
+    client)
+        sudo nmcli connection modify "$HOTSPOT" connection.autoconnect no
+        sudo nmcli connection modify "$client" connection.autoconnect yes
+        sudo nmcli connection up "$client"
+        ;;
+    status)
+        ;;
+    *)
+        echo "usage: kiwi-wifi hotspot | client [connection] | status" >&2
+        exit 2
+        ;;
+esac
+
+nmcli -t -f NAME,DEVICE connection show --active | grep -v '^lo:'
