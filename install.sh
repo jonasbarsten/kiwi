@@ -101,13 +101,22 @@ fi
 for unit in lightdm wayvnc-control patchbox-vnc.target modep-mod-host modep-mod-ui \
             modep-touchosc2midi touchosc2midi modep-update.path cups cups-browsed \
             bluetooth hciuart ModemManager blokas-telemetry.target wifi-hotspot \
-            glamor-test rp1-test apt-daily.timer apt-daily-upgrade.timer; do
-    sudo systemctl disable "$unit" 2>/dev/null || true
+            glamor-test rp1-test apt-daily.timer apt-daily-upgrade.timer \
+            pisound-ctl triggerhappy triggerhappy.socket \
+            man-db.timer dpkg-db-backup.timer e2scrub_all.timer fstrim.timer; do
+    # pisound-ctl: Bluetooth link to the Pisound phone app (Bluetooth is off).
+    # Timers: periodic maintenance that could fire mid-performance.
+    sudo systemctl disable --now "$unit" 2>/dev/null || true
+done
+# D-Bus activated, so disabling is not enough: mask them.
+for unit in packagekit rtkit-daemon; do
+    sudo systemctl mask --now "$unit"
 done
 for unit in fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.service \
-            pipewire-pulse.socket wireplumber.service; do
+            pipewire-pulse.socket wireplumber.service pulseaudio.service pulseaudio.socket; do
     sudo systemctl --global mask "$unit"
 done
+systemctl --user stop pulseaudio.service pulseaudio.socket 2>/dev/null || true
 
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"

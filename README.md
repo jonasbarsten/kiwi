@@ -147,9 +147,12 @@ The Pi boots to a console (`multi-user.target`), not a desktop. Nothing is unins
   `patchbox-init` re-enables MODEP's services on every boot.
 - Disabled: `lightdm`, `wayvnc-control`, `patchbox-vnc.target`, MODEP services,
   `touchosc2midi`, `cups`, `cups-browsed`, `bluetooth`, `hciuart`, `ModemManager`,
-  `blokas-telemetry.target`, `wifi-hotspot`, `glamor-test`, `rp1-test`, and the
-  `apt-daily` timers (so it never upgrades itself mid-gig).
-- Masked for all users: FluidSynth, PipeWire, PipeWire-Pulse and WirePlumber.
+  `blokas-telemetry.target`, `wifi-hotspot`, `glamor-test`, `rp1-test`, `pisound-ctl`
+  (Bluetooth link to the Pisound phone app), `triggerhappy`, and the `apt-daily`,
+  `man-db`, `dpkg-db-backup`, `e2scrub_all` and `fstrim` timers (so no maintenance job
+  fires mid-performance; run `sudo fstrim -av` by hand now and then).
+- Masked: `packagekit`, `rtkit-daemon` (D-Bus activated), and for all users FluidSynth,
+  PipeWire, PipeWire-Pulse, WirePlumber and PulseAudio.
 - rtpmidid runs with `system/rtpmidid.ini` (via a systemd drop-in): it receives network
   MIDI but does not export the Pi's own MIDI ports back to the network.
 
