@@ -70,7 +70,7 @@ already provides), Pure Data (fragile Pianoteq hosting, hand-built DSP).
 | Sampler | sfizz LV2 | built from a pinned source release on the Pi (not in apt) |
 | Carrier synth | amsynth LV2 | already installed (MODEP) |
 | Vocoder | mda TalkBox LV2 | already installed (MODEP) |
-| Reverb | Dragonfly Room or Plate | apt `dragonfly-reverb` |
+| Reverb | Dragonfly Plate (Room overran at 128 frames on this Pi) | apt `dragonfly-reverb` |
 | Master limiter | x42-dpl | apt `x42-plugins` |
 | Carrier blend | `kiwi-carrier` | this repo |
 | Mixer | `kiwi-mix` | this repo |

@@ -41,10 +41,22 @@ section "Pianoteq"
 mkdir -p "$HOME/.lv2"
 ln -sfn "$HOME/.vst/Pianoteq 8.lv2" "$HOME/.lv2/Pianoteq 8.lv2"
 prefs="$HOME/.config/Modartt/Pianoteq83.prefs"
-if grep -q '<VALUE name="voices" val="' "$prefs"; then
+if [ -f "$prefs" ] && grep -q '<VALUE name="voices" val="' "$prefs"; then
     sed -i 's/<VALUE name="voices" val="[0-9]*"\/>/<VALUE name="voices" val="32"\/>/' "$prefs"
+    # Two engine threads spread the attack work of chords across cores.
+    sed -i 's/<VALUE name="multicore" val="[0-9]*"\/>/<VALUE name="multicore" val="2"\/>/' "$prefs"
+    grep -E 'name="(voices|multicore|engine_rate)"' "$prefs" || true
+else
+    echo "Pianoteq prefs not found or without a voices setting: $prefs (run Pianoteq once, then re-run install.sh)"
 fi
-grep -E 'name="(voices|engine_rate)"' "$prefs"
+
+section "JACK"
+# Patchbox owns /etc/jackdrc; set it through its CLI, and only when it differs,
+# since that restarts JACK (and with it the kiwi host).
+if ! grep -q -- "-r 48000 -p 128 -n 2 " /etc/jackdrc; then
+    sudo patchbox jack config --rate 48000 --buffer 128 --period 2
+fi
+tail -1 /etc/jackdrc
 
 section "Host"
 chmod +x "$KIWI_DIR/host/kiwi-load"

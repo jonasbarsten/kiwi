@@ -7,7 +7,7 @@ add http://code.google.com/p/amsynth/amsynth 2
 add https://github.com/jonasbarsten/kiwi#carrier 3
 add http://moddevices.com/plugins/mda/TalkBox 4
 add https://github.com/jonasbarsten/kiwi#mix 5
-add urn:dragonfly:room 6
+add urn:dragonfly:plate 6
 add http://gareus.org/oss/lv2/dpl#stereo 7
 
 # Pianoteq: its own reverb off (we have a shared reverb)
@@ -41,11 +41,10 @@ param_set 4 wet 100
 param_set 4 dry 0
 param_set 4 quality 100
 
-# Reverb: fully wet on the send bus
+# Reverb: Dragonfly Plate, fully wet on the send bus. (Dragonfly Room overran
+# its JACK deadline every 32768 frames whenever signal reached it, at 128 frames.)
 param_set 6 dry_level 0
-param_set 6 early_level 20
-param_set 6 late_level 60
-param_set 6 size 16
+param_set 6 early_level 30
 param_set 6 decay 1.6
 
 # Limiter at -1 dBFS

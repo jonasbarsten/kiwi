@@ -33,7 +33,8 @@ done < <(grep '^connect ' "$patch_file")
 echo "connections missing: $missing"
 problems=$((problems + missing))
 
-echo "xruns this boot: $(journalctl -u jack -b --no-pager | grep -ci xrun)"
+# JACK reports a late graph as "XRun" lines and, in async mode, "Process error" lines.
+echo "xrun/process-error lines this boot: $(journalctl -u jack -b --no-pager | grep -cE "XRun|Process error|xrun")"
 echo "temperature: $(vcgencmd measure_temp)  throttled: $(vcgencmd get_throttled)"
 top -bn1 | awk '/mod-host|jackd/ { print "cpu " $9 "% " $12 }'
 

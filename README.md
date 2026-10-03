@@ -48,7 +48,9 @@ rsync -a --delete --exclude backup --exclude legacy --exclude pure-data --exclud
 ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh'
 ```
 
-`install.sh` is safe to re-run.
+`install.sh` is safe to re-run. It builds on Patchbox OS: `mod-host`, amsynth, mda TalkBox
+(from the MODEP module) and `jack.service` come from Patchbox, not from `install.sh`, and
+Pianoteq 8 must already be installed and activated in `~/.vst/Pianoteq 8.lv2`.
 
 ## How the patch works
 
@@ -66,15 +68,29 @@ of the kernel `Midi Through` device, where all MIDI sources are merged.
 | 3 | kiwi carrier | blends synth / piano / sampler into the carrier |
 | 4 | mda TalkBox | vocoder: mic on Pisound input 1 (left), carrier on right |
 | 5 | kiwi mix | per-mode volume and post-fader reverb send |
-| 6 | Dragonfly Room | shared reverb, fully wet |
+| 6 | Dragonfly Plate | shared reverb, fully wet |
 | 7 | x42 dpl | limiter at −1 dBFS before the Pisound output |
 
 To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
 (0 = channel 1). To change the sampler's root key or envelope, edit `sampler/kiwi.sfz`.
 
 Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
-`install.sh` caps polyphony at 32 voices; the internal engine rate is 24 kHz. The plugin
-runs its default preset with its own reverb switched off.
+`install.sh` caps polyphony at 32 voices and uses two engine threads (`multicore=2`). The
+internal engine rate (24 kHz on this Pi) is left as Pianoteq has it; `install.sh` only
+prints it. The plugin runs its default preset.
+
+## Latency and performance
+
+JACK runs at 48 kHz, 128 frames, 2 periods (about 5.3 ms output latency); `install.sh`
+sets this through `patchbox jack config`. Findings from tuning on this Pi:
+
+- **Dragonfly Room is not usable at 128 frames here**: whenever signal reaches it, it
+  overruns its deadline every 32768 frames (a steady glitch at ~88 bpm). Dragonfly Plate
+  does not, so the shared reverb is a Plate.
+- `mod-host`'s `bypass` does not stop every plugin's processing, so bypassing is not a
+  reliable way to find which plugin is expensive; disconnecting its input is.
+- Pianoteq with `multicore=2` absorbs dense chords with the sustain pedal held;
+  with `multicore=1` the same chords overran.
 
 ## Operations
 
