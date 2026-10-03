@@ -75,7 +75,7 @@ To change the MIDI channel of the knobs, edit the third number of the `midi_map`
 (0 = channel 1). To change the sampler's root key or envelope, edit `sampler/kiwi.sfz`.
 
 Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
-`install.sh` caps polyphony at 32 voices and uses two engine threads (`multicore=2`). The
+`install.sh` caps polyphony at 24 voices and uses two engine threads (`multicore=2`). The
 internal engine rate (24 kHz on this Pi) is left as Pianoteq has it; `install.sh` only
 prints it. The plugin runs its default preset.
 
@@ -91,6 +91,10 @@ sets this through `patchbox jack config`. Findings from tuning on this Pi:
   reliable way to find which plugin is expensive; disconnecting its input is.
 - Pianoteq with `multicore=2` absorbs dense chords with the sustain pedal held;
   with `multicore=1` the same chords overran.
+- `host/kiwi-stress [seconds]` plays a worst case (sustain held, alternating 8-note
+  chords every 0.4 s) through a temporary virtual MIDI port and counts JACK errors.
+  5 minutes at 128 frames: 32 voices → about 6 short overruns; 24 voices → about 1.
+  Normal playing and single chords give none.
 
 ## Operations
 

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Worst-case load test: sustain pedal held, two alternating 8-note chords.
+# Plays through a kernel virtual MIDI port into Midi Through, then reports how
+# many JACK xrun / process-error lines were logged during the run.
+# Usage: kiwi-stress [seconds]   (default 60)
+set -u
+
+duration=${1:-60}
+
+if ! amidi -l | grep -q "Virtual Raw MIDI"; then
+    sudo modprobe snd-virmidi midi_devs=1
+    sleep 1
+fi
+device=$(amidi -l | awk '/Virtual Raw MIDI/ { print $2; exit }')
+client=$(aconnect -l | awk -F'[ :]' '/Virtual Raw MIDI/ { print $2; exit }')
+aconnect "$client:0" "Midi Through:0" 2>/dev/null || true
+
+chord_a="90 24 70 90 30 70 90 37 70 90 3C 70 90 40 70 90 43 70 90 48 70 90 4C 70"
+chord_b="90 26 70 90 32 70 90 39 70 90 3E 70 90 41 70 90 45 70 90 4A 70 90 4D 70"
+release="80 24 40 80 30 40 80 37 40 80 3C 40 80 40 40 80 43 40 80 48 40 80 4C 40 80 26 40 80 32 40 80 39 40 80 3E 40 80 41 40 80 45 40 80 4A 40 80 4D 40"
+
+start=$(date '+%F %T')
+end=$((SECONDS + duration))
+amidi -p "$device" -S "B0 40 7F"
+while [ "$SECONDS" -lt "$end" ]; do
+    amidi -p "$device" -S "$chord_a"; sleep 0.4
+    amidi -p "$device" -S "$chord_b"; sleep 0.4
+    amidi -p "$device" -S "$release"; sleep 0.7
+done
+amidi -p "$device" -S "B0 40 00"
+sleep 4
+
+errors=$(journalctl -u jack --since "$start" --no-pager | grep -cE "XRun|Process error")
+echo "kiwi-stress: ${duration}s, ${errors} xrun/process-error lines"
+[ "$errors" -eq 0 ]

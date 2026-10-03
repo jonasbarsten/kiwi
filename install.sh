@@ -42,7 +42,7 @@ mkdir -p "$HOME/.lv2"
 ln -sfn "$HOME/.vst/Pianoteq 8.lv2" "$HOME/.lv2/Pianoteq 8.lv2"
 prefs="$HOME/.config/Modartt/Pianoteq83.prefs"
 if [ -f "$prefs" ] && grep -q '<VALUE name="voices" val="' "$prefs"; then
-    sed -i 's/<VALUE name="voices" val="[0-9]*"\/>/<VALUE name="voices" val="32"\/>/' "$prefs"
+    sed -i 's/<VALUE name="voices" val="[0-9]*"\/>/<VALUE name="voices" val="24"\/>/' "$prefs"
     # Two engine threads spread the attack work of chords across cores.
     sed -i 's/<VALUE name="multicore" val="[0-9]*"\/>/<VALUE name="multicore" val="2"\/>/' "$prefs"
     grep -E 'name="(voices|multicore|engine_rate)"' "$prefs" || true
