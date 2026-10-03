@@ -1,1 +1,483 @@
-<!doctype html><title>kiwi</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#5B3A1E">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="kiwi">
+<title>kiwi</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-50 -50 100 100'%3E%3Ccircle r='48' fill='%235B3A1E'/%3E%3Ccircle r='42' fill='%238DC63F'/%3E%3Ccircle r='13' fill='%23F3F0D7'/%3E%3C/svg%3E">
+<style>
+:root {
+  --skin: #5B3A1E; --fuzz: #8A6A45; --flesh: #8DC63F; --flesh-hi: #C5E17A;
+  --core: #F3F0D7; --seed: #1E1A14; --bg: #170f08; --card: #26180c; --line: #4a3420;
+  --muted: #bcaa8a; --warn: #e8a33c; --bad: #e0573a;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--core);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);
+}
+header {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top)) 16px 8px; background: var(--skin);
+  border-bottom: 3px solid var(--fuzz);
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 20px; }
+.brand svg { width: 28px; height: 28px; }
+.spacer { flex: 1; }
+.stat { font-size: 14px; font-variant-numeric: tabular-nums; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.online { background: var(--flesh); }
+.dot.offline { background: var(--bad); }
+.dot.starting, .dot.idle { background: var(--warn); }
+.dot.pulse { background: var(--flesh-hi); box-shadow: 0 0 0 3px rgba(197,225,122,.35); }
+main {
+  display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1200px; margin: 0 auto;
+  padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
+}
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; min-width: 0; }
+.card h2, details.card > summary {
+  margin: 0 0 6px; font-size: 14px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--flesh-hi);
+}
+.modes { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.mode { border-top: 1px solid var(--line); padding-top: 6px; }
+.mode:first-child { border-top: 0; padding-top: 0; }
+.mode h3 { margin: 0; font-size: 17px; }
+.row { display: grid; grid-template-columns: minmax(5.5em, 8em) 1fr 3.4em; align-items: center; gap: 10px; min-height: 48px; }
+.row.choice { grid-template-columns: minmax(5.5em, 8em) 1fr; }
+.row label { font-size: 16px; overflow-wrap: anywhere; }
+.row label small { display: block; font-size: 12px; color: var(--muted); }
+.row output { text-align: right; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row.differs label::before { content: "● "; color: var(--flesh); font-size: 12px; }
+.row.unknown output { color: var(--fuzz); }
+input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 48px; margin: 0;
+  background: transparent; touch-action: none; --fill: 0%;
+}
+input[type=range]:focus-visible { outline: 2px solid var(--flesh-hi); outline-offset: 2px; border-radius: 8px; }
+input[type=range]::-webkit-slider-runnable-track {
+  height: 10px; border-radius: 5px;
+  background: linear-gradient(90deg, var(--flesh) var(--fill), var(--line) var(--fill));
+}
+input[type=range]::-moz-range-track { height: 10px; border-radius: 5px; background: var(--line); }
+input[type=range]::-moz-range-progress { height: 10px; border-radius: 5px; background: var(--flesh); }
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 24px; height: 34px; margin-top: -12px;
+  border-radius: 50% / 60% 60% 40% 40%; background: var(--seed); border: 2px solid var(--core);
+}
+input[type=range]::-moz-range-thumb {
+  width: 24px; height: 34px; border-radius: 50% / 60% 60% 40% 40%;
+  background: var(--seed); border: 2px solid var(--core);
+}
+.unknown input[type=range]::-webkit-slider-thumb { opacity: .45; }
+.unknown input[type=range]::-moz-range-thumb { opacity: .45; }
+.blend-labels { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin: -6px 0 0; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+button, select {
+  font: inherit; font-size: 16px; min-height: 44px; min-width: 44px; border-radius: 12px;
+  border: 1px solid var(--fuzz); background: var(--skin); color: var(--core); padding: 0 14px;
+}
+button.on { background: var(--flesh); border-color: var(--flesh); color: var(--seed); font-weight: 700; }
+select { width: 100%; }
+.midi { display: flex; align-items: center; gap: 14px; }
+.midi svg { width: 104px; height: 104px; flex: none; }
+.seed { fill: var(--seed); transition: fill 80ms; }
+.seed.on { fill: var(--core); }
+.last { font-size: 15px; color: var(--muted); min-height: 2.8em; }
+.ccs { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
+.cc { font-size: 12px; text-align: center; color: var(--muted); }
+.cc i { display: block; position: relative; height: 32px; border-radius: 6px; background: var(--line); overflow: hidden; margin-bottom: 2px; }
+.cc i b { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--flesh); }
+details.card > summary {
+  list-style: none; display: flex; align-items: center; min-height: 44px; margin: -4px 0; cursor: pointer;
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::after { content: "+"; margin-left: auto; font-size: 24px; color: var(--core); }
+details.card[open] > summary::after { content: "−"; }
+details.card[open] > summary { margin-bottom: 6px; }
+.group { margin: 10px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.note { font-size: 13px; color: var(--muted); margin: 4px 0 8px; }
+footer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); background: var(--skin);
+  border-top: 3px solid var(--fuzz); font-size: 14px;
+}
+@media (min-width: 768px) {
+  main { grid-template-columns: 1fr 1fr; padding-left: 16px; padding-right: 16px; }
+  .modes { grid-template-columns: repeat(3, 1fr); }
+  .mode { border-top: 0; padding-top: 0; }
+  .wide { grid-column: 1 / -1; }
+}
+@media (min-width: 1100px) { main { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg viewBox="-50 -50 100 100" aria-hidden="true"><circle r="48" style="fill:var(--fuzz)"/><circle r="42" style="fill:var(--flesh)"/><circle r="13" style="fill:var(--core)"/></svg>
+    kiwi
+  </div>
+  <span class="dot" id="hostdot" title="audio host"></span>
+  <span class="spacer"></span>
+  <span class="stat" id="cpu">cpu –</span>
+  <span class="stat" id="temp">–°C</span>
+  <span class="dot" id="mididot" title="MIDI in"></span>
+</header>
+<main id="main">
+  <section class="card wide">
+    <h2>Mix</h2>
+    <div class="modes" id="modes"></div>
+    <div id="blend"></div>
+  </section>
+  <section class="card">
+    <h2>MIDI in</h2>
+    <div class="midi">
+      <svg viewBox="-50 -50 100 100" id="slice" aria-hidden="true"></svg>
+      <div class="last" id="last">no MIDI yet</div>
+    </div>
+    <div class="ccs" id="ccs"></div>
+  </section>
+</main>
+<footer>
+  <span id="saved">autosave on</span>
+  <span class="spacer"></span>
+  <button type="button" id="reset">Reset to patch</button>
+</footer>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const SVG = 'http://www.w3.org/2000/svg';
+const values = new Map();
+const controls = new Map();
+const pending = new Map();
+let meta = null;
+let source = null;
+let dragging = null;
+let flushTimer = null;
+let lastTap = { key: null, time: 0 };
+
+function keyOf(plugin, param) {
+  return plugin.kind === 'port'
+    ? `port:${plugin.instance}:${param.symbol}`
+    : `patch:${plugin.instance}:${param.uri}`;
+}
+
+function format(param, v) {
+  if (v === null || v === undefined) return '–';
+  if (param.type === 'toggle') return v >= 0.5 ? 'on' : 'off';
+  if (param.options) {
+    const option = param.options.find(([value]) => Math.abs(value - v) < 1e-6);
+    if (option) return option[1];
+  }
+  if (param.type === 'int') return String(Math.round(v));
+  const span = param.max - param.min;
+  return span <= 2 ? v.toFixed(2) : span <= 200 ? v.toFixed(1) : String(Math.round(v));
+}
+
+function ccFor(instance, symbol) {
+  return meta.cc_map.find((m) => m.instance === instance && m.symbol === symbol);
+}
+
+function makeControl(plugin, param, label) {
+  const key = keyOf(plugin, param);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const lab = document.createElement('label');
+  lab.textContent = label || param.name;
+  if (plugin.kind === 'port') {
+    const cc = ccFor(plugin.instance, param.symbol);
+    if (cc) {
+      const small = document.createElement('small');
+      small.textContent = `CC ${cc.cc}`;
+      lab.appendChild(small);
+    }
+  }
+  let input;
+  let output = null;
+  const choices = param.type === 'toggle'
+    ? [[param.min, 'off'], [param.max, 'on']]
+    : param.options;
+  if (choices && choices.length <= 4) {
+    row.classList.add('choice');
+    input = document.createElement('div');
+    input.className = 'seg';
+    for (const [value, text] of choices) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.dataset.value = value;
+      button.addEventListener('click', () => change(key, value));
+      input.appendChild(button);
+    }
+  } else if (choices) {
+    row.classList.add('choice');
+    input = document.createElement('select');
+    for (const [value, text] of choices) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      input.appendChild(option);
+    }
+    input.addEventListener('change', () => change(key, parseFloat(input.value)));
+  } else {
+    input = document.createElement('input');
+    input.type = 'range';
+    input.min = param.min;
+    input.max = param.max;
+    input.step = param.type === 'int' ? 1 : (param.max - param.min) / 1000;
+    input.id = `c${controls.size}`;
+    lab.htmlFor = input.id;
+    input.addEventListener('pointerdown', () => { dragging = key; });
+    const release = () => {
+      if (dragging === key) dragging = null;
+      const now = performance.now();
+      if (lastTap.key === key && now - lastTap.time < 300) change(key, param.baseline);
+      lastTap = { key, time: now };
+    };
+    input.addEventListener('pointerup', release);
+    input.addEventListener('pointercancel', () => { dragging = null; });
+    input.addEventListener('input', () => change(key, parseFloat(input.value)));
+    output = document.createElement('output');
+  }
+  row.append(lab, input);
+  if (output) row.append(output);
+  const control = { key, row, input, output, param, plugin };
+  controls.set(key, control);
+  render(control);
+  return row;
+}
+
+function render(control) {
+  const { param, input, output, row } = control;
+  const v = values.has(control.key) ? values.get(control.key) : null;
+  row.classList.toggle('unknown', v === null);
+  const span = Math.abs(param.max - param.min) || 1;
+  row.classList.toggle('differs', v !== null && Math.abs(v - param.baseline) > span * 1e-4);
+  if (input.tagName === 'INPUT') {
+    const shown = v === null ? param.baseline : v;
+    if (dragging !== control.key) input.value = shown;
+    input.style.setProperty('--fill', `${((shown - param.min) / span) * 100}%`);
+    output.textContent = format(param, v);
+  } else if (input.tagName === 'SELECT') {
+    if (v !== null) input.value = String(v);
+  } else {
+    for (const button of input.children) {
+      button.classList.toggle('on', v !== null && Math.abs(parseFloat(button.dataset.value) - v) < 1e-6);
+    }
+  }
+}
+
+function setValue(key, v) {
+  values.set(key, v);
+  const control = controls.get(key);
+  if (control) render(control);
+}
+
+function change(key, v) {
+  const control = controls.get(key);
+  setValue(key, v);
+  const item = { instance: control.plugin.instance, value: v };
+  if (control.plugin.kind === 'port') item.symbol = control.param.symbol;
+  else item.uri = control.param.uri;
+  pending.set(key, item);
+  if (!flushTimer) flushTimer = setTimeout(flush, 50);
+}
+
+async function flush() {
+  flushTimer = null;
+  const changes = [...pending.values()];
+  pending.clear();
+  if (!changes.length) return;
+  try {
+    await fetch('/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ changes }) });
+  } catch (error) {
+    setHost('offline');
+  }
+}
+
+function section(title, build, note) {
+  const details = document.createElement('details');
+  details.className = 'card';
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  details.appendChild(summary);
+  if (note) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = note;
+    details.appendChild(p);
+  }
+  details.addEventListener('toggle', () => {
+    if (details.open && !details.dataset.built) {
+      details.dataset.built = '1';
+      build(details);
+    }
+  });
+  $('main').appendChild(details);
+}
+
+function addGrouped(container, plugin, params) {
+  let group = null;
+  const sorted = [...params].sort((a, b) => (a.group || '').localeCompare(b.group || ''));
+  for (const param of sorted) {
+    if ((param.group || '') !== group) {
+      group = param.group || '';
+      if (group) {
+        const heading = document.createElement('div');
+        heading.className = 'group';
+        heading.textContent = group;
+        container.appendChild(heading);
+      }
+    }
+    container.appendChild(makeControl(plugin, param));
+  }
+}
+
+function build() {
+  const plugin = (instance) => meta.plugins.find((p) => p.instance === instance);
+  const mix = plugin(5);
+  for (const [title, prefix] of [['Piano', 'piano'], ['Sampler', 'sampler'], ['Vocoder', 'vocoder']]) {
+    const card = document.createElement('div');
+    card.className = 'mode';
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    card.appendChild(heading);
+    for (const [suffix, label] of [['vol', 'Volume'], ['send', 'Reverb']]) {
+      const param = mix.params.find((p) => p.symbol === `${prefix}_${suffix}`);
+      if (param) card.appendChild(makeControl(mix, param, label));
+    }
+    $('modes').appendChild(card);
+  }
+  const carrier = plugin(3);
+  const blend = carrier.params.find((p) => p.symbol === 'blend');
+  $('blend').appendChild(makeControl(carrier, blend, 'Vocoder carrier'));
+  const labels = document.createElement('div');
+  labels.className = 'blend-labels';
+  for (const text of ['synth', 'piano', 'sampler']) {
+    const span = document.createElement('span');
+    span.textContent = text;
+    labels.appendChild(span);
+  }
+  $('blend').appendChild(labels);
+
+  for (const m of meta.cc_map) {
+    const cell = document.createElement('div');
+    cell.className = 'cc';
+    cell.innerHTML = `<i><b id="cc${m.cc}"></b></i>${m.cc}`;
+    $('ccs').appendChild(cell);
+  }
+
+  for (const p of meta.plugins) {
+    if (p.instance === 5 || p.instance === 3) continue;
+    if (p.kind === 'patch') {
+      const note = 'Pianoteq values are shown once set from this page.';
+      section('Pianoteq', (d) => addGrouped(d, p, p.params.filter((q) => q.curated)), note);
+      section('Pianoteq · all parameters', (d) => addGrouped(d, p, p.params), note);
+    } else {
+      section(p.title, (d) => addGrouped(d, p, p.params));
+    }
+  }
+}
+
+function drawSlice() {
+  const svg = $('slice');
+  const shape = (tag, attrs) => {
+    const el = document.createElementNS(SVG, tag);
+    for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+    svg.appendChild(el);
+    return el;
+  };
+  shape('circle', { r: 48, style: 'fill:var(--fuzz)' });
+  shape('circle', { r: 43, style: 'fill:var(--flesh)' });
+  shape('circle', { r: 30, style: 'fill:var(--flesh-hi);opacity:.35' });
+  shape('circle', { r: 13, style: 'fill:var(--core)' });
+  for (let i = 0; i < 12; i++) {
+    const angle = i * 30 - 90;
+    const x = 23 * Math.cos(angle * Math.PI / 180);
+    const y = 23 * Math.sin(angle * Math.PI / 180);
+    shape('ellipse', { cx: x, cy: y, rx: 3, ry: 6, class: 'seed', id: `seed${i}`,
+                       transform: `rotate(${angle + 90} ${x} ${y})` });
+  }
+}
+
+function lightSeeds(notes) {
+  const classes = new Set(notes.map((n) => n % 12));
+  for (let i = 0; i < 12; i++) $(`seed${i}`).classList.toggle('on', classes.has(i));
+}
+
+function setHost(state) {
+  $('hostdot').className = `dot ${state}`;
+  $('hostdot').title = `audio host: ${state}`;
+}
+
+let midiPulse = null;
+function pulseMidi() {
+  $('mididot').classList.add('pulse');
+  clearTimeout(midiPulse);
+  midiPulse = setTimeout(() => $('mididot').classList.remove('pulse'), 150);
+}
+
+function apply(delta) {
+  for (const [key, v] of Object.entries(delta)) {
+    if (key.startsWith('port:') || key.startsWith('patch:')) {
+      if (key !== dragging && !pending.has(key)) setValue(key, v);
+    } else if (key === 'status:host') {
+      setHost(v);
+    } else if (key === 'status:cpu') {
+      $('cpu').textContent = v === null ? 'cpu –' : `cpu ${v}%`;
+    } else if (key === 'status:temp') {
+      $('temp').textContent = v === null ? '–°C' : `${v}°C`;
+    } else if (key === 'status:saved') {
+      $('saved').textContent = `saved ${new Date(v * 1000).toLocaleTimeString()}`;
+    } else if (key === 'midi:notes') {
+      lightSeeds(v);
+    } else if (key === 'midi:last') {
+      $('last').textContent = v;
+      pulseMidi();
+    } else if (key.startsWith('midi:cc:')) {
+      const bar = $(`cc${key.slice(8)}`);
+      if (bar) bar.style.height = `${(v / 127) * 100}%`;
+    }
+  }
+}
+
+function connect() {
+  if (source || !meta) return;
+  source = new EventSource('/events');
+  source.onmessage = (event) => apply(JSON.parse(event.data));
+  source.onerror = () => setHost('offline');
+}
+
+function disconnect() {
+  if (source) {
+    source.close();
+    source = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
+
+$('reset').addEventListener('click', async () => {
+  if (!confirm('Reset every value to the patch defaults?')) return;
+  await fetch('/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+});
+
+fetch('/params.json')
+  .then((response) => response.json())
+  .then((data) => {
+    meta = data;
+    build();
+    drawSlice();
+    if (!document.hidden) connect();
+  });
+</script>
+</body>
+</html>
