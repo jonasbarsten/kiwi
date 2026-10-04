@@ -40,6 +40,7 @@ header {
 main {
   display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1200px; margin: 0 auto;
   padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
+  align-items: start;   /* an expanded section must not stretch its neighbours */
 }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; min-width: 0; }
 .card h2, details.card > summary {
@@ -169,6 +170,7 @@ let flushTimer = null;
 let lastTap = { key: null, time: 0 };
 
 function keyOf(plugin, param) {
+  if (param.cc !== undefined) return `cc:${param.cc}`;
   return plugin.kind === 'port'
     ? `port:${plugin.instance}:${param.symbol}`
     : `patch:${plugin.instance}:${param.uri}`;
@@ -308,7 +310,8 @@ function change(key, v) {
   const control = controls.get(key);
   setValue(key, v);
   const item = { instance: control.plugin.instance, value: v };
-  if (control.plugin.kind === 'port') item.symbol = control.param.symbol;
+  if (control.param.cc !== undefined) item.cc = control.param.cc;
+  else if (control.plugin.kind === 'port') item.symbol = control.param.symbol;
   else item.uri = control.param.uri;
   pending.set(key, item);
   if (!flushTimer) flushTimer = setTimeout(flush, FAST_MS);
@@ -516,7 +519,7 @@ function pulseMidi() {
 
 function apply(delta) {
   for (const [key, v] of Object.entries(delta)) {
-    if (key.startsWith('port:') || key.startsWith('patch:')) {
+    if (key.startsWith('port:') || key.startsWith('patch:') || key.startsWith('cc:')) {
       if (key !== dragging && !pending.has(key)) setValue(key, v);
     } else if (key === 'reverb:current') {
       if (v !== currentReverb) {

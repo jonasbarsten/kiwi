@@ -43,6 +43,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable rtpmidid
 sudo systemctl restart rtpmidid
 
+section "Virtual MIDI device"
+sudo install -m 644 "$KIWI_DIR/system/kiwi-modules.conf" /etc/modules-load.d/kiwi.conf
+sudo install -m 644 "$KIWI_DIR/system/kiwi-modprobe.conf" /etc/modprobe.d/kiwi.conf
+lsmod | grep -q '^snd_virmidi' || sudo modprobe snd-virmidi
+
 section "MIDI routing"
 # Replaces the /etc/amidiminder.rules symlink (to /etc/default/amidiminder.rules)
 # with the kiwi rules; the Patchbox default file is left untouched.

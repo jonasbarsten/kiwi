@@ -139,6 +139,16 @@ separately (`reverb_params`), the choice as `reverb`; `kiwi-restore` performs th
 at boot. Parameter changes for instance 6 are validated against the current reverb.
 `kiwi-check` matches the reverb's connections by instance, not port name.
 
+### 4.2 CC-driven parameters (added 2026-10-04)
+
+sfizz has no envelope ports, so `kiwi.sfz` binds its amplitude envelope to CC 102–105
+(`ampeg_*_oncc`, with `set_cc` defaults). `params.json` lists these as Sampler parameters
+with a `cc` field; the server sends them as 7-bit CCs on channel 1 through the kernel's
+virtual raw MIDI device (`snd-virmidi`, `/dev/snd/midiC<n>D0`, found by card id), which
+amidiminder routes into Midi Through. Values cannot be read back; the model starts from the
+defaults (or the autosaved values), `kiwi-restore` re-sends saved CCs at boot, and Reset sends
+the defaults.
+
 ## 5. Pianoteq presets
 
 - **Export** (one-time, `install.sh`): the Pianoteq standalone exports all presets as LV2

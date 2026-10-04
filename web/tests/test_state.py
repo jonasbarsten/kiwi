@@ -72,13 +72,23 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(other.data['reverb'], 'calf')
         self.assertEqual(other.data['reverb_params'], {'calf': {'decay_time': 0.9}})
 
+    def test_cc_values(self):
+        self.store.set_cc(105, 1.2, baseline=0.1)
+        self.store.set_cc(102, 0.0, baseline=0.0)   # equals baseline: dropped
+        self.store.flush()
+        other = StateStore(self.path)
+        other.load()
+        self.assertEqual(other.data['cc'], {'105': 1.2})
+
     def test_load_drops_non_finite_and_malformed(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, 'w') as f:
             f.write('{"params": {"5:piano_vol": NaN, "junk": 0.5, "3:blend": 1.0},'
-                    ' "reverb": 7, "reverb_params": {"calf": {"x": Infinity, "y": 0.2}, "bad": 3}}')
+                    ' "reverb": 7, "reverb_params": {"calf": {"x": Infinity, "y": 0.2}, "bad": 3},'
+                    ' "cc": {"102": 0.5, "x": 1, "103": "no"}}')
         data = self.store.load()
         self.assertEqual(data['params'], {'3:blend': 1.0})
+        self.assertEqual(data['cc'], {'102': 0.5})
         self.assertIsNone(data['reverb'])
         self.assertEqual(data['reverb_params'], {'calf': {'y': 0.2}})
 

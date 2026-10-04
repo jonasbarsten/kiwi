@@ -1,1 +1,15 @@
-<region> sample=sample.wav lokey=0 hikey=127 pitch_keycenter=60
+// One sample, repitched across the keyboard. The amplitude envelope is driven by
+// CC 102-105 (attack, decay, sustain, release), which the web UI sends through
+// the virtual MIDI device; set_cc gives the values before anything is sent.
+<control>
+set_cc102=0
+set_cc103=0
+set_cc104=127
+set_cc105=3
+
+<region>
+sample=sample.wav lokey=0 hikey=127 pitch_keycenter=60
+ampeg_attack=0 ampeg_attack_oncc102=2
+ampeg_decay=0 ampeg_decay_oncc103=4
+ampeg_sustain=0 ampeg_sustain_oncc104=100
+ampeg_release=0 ampeg_release_oncc105=4

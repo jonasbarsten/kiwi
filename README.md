@@ -73,7 +73,8 @@ of the kernel `Midi Through` device, where all MIDI sources are merged.
 | 7 | x42 dpl | limiter at −1 dBFS on the dry bus (the reverb return bypasses it, see below) |
 
 To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
-(0 = channel 1). To change the sampler's root key or envelope, edit `sampler/kiwi.sfz`.
+(0 = channel 1). To change the sampler's root key or the envelope ranges, edit
+`sampler/kiwi.sfz` (the envelope itself is set from the web UI).
 
 Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
 `install.sh` caps polyphony at 24 voices and uses two engine threads (`multicore=2`). The
@@ -118,6 +119,10 @@ a full-screen app.
   Guitarix Reverb, Dragonfly Plate: `web/kiwi_web/reverbs.py`). The tail cuts for a moment;
   the dry sound is untouched. Each reverb keeps its own settings, and the choice is
   autosaved and restored at boot. Reset returns to the `kiwi.patch` reverb.
+- **Sampler envelope**: attack, decay, sustain and release live in `sampler/kiwi.sfz` as
+  CC-driven opcodes (CC 102–105). The page sends those CCs through the kernel's virtual
+  MIDI device (`snd-virmidi`, routed into Midi Through), so they reach sfizz like any
+  knob; the values are autosaved and re-sent at boot by `kiwi-restore`.
 - **Sections**: limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
   (curated) and Pianoteq (all parameters). Routing-critical settings are not offered.
   Pianoteq values show "–" until set from the page (mod-host cannot read them back).

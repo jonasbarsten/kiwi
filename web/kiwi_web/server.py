@@ -20,6 +20,7 @@ from . import reverbs, security
 from .midi import MidiMonitor, describe
 from .modhost import HostClient, HostError
 from .patchfile import parse_patch
+from .rawmidi import RawMidi, find_device, to_7bit
 from .state import StateStore
 
 MAX_STREAMS = 4
@@ -100,6 +101,16 @@ def reverb_baselines(meta):
     return {r['id']: {q['symbol']: q['baseline'] for q in r['params']} for r in meta.get('reverbs', [])}
 
 
+def cc_controls(meta):
+    """{cc number: param} for parameters the page sends as MIDI CCs (the sampler envelope)."""
+    return {q['cc']: q for p in meta['plugins'] for q in p['params'] if 'cc' in q}
+
+
+def send_cc(midi, param, value):
+    """Sends `value` (in the parameter's range) as a 7-bit CC on channel 1."""
+    return midi.cc(0, param['cc'], to_7bit(value, param['min'], param['max']))
+
+
 def switch_reverb(client, reverb_id, settings):
     """Puts a reverb into the slot through `client`. Returns the number of failed commands."""
     entry = reverbs.find(reverb_id)
@@ -115,16 +126,20 @@ def switch_reverb(client, reverb_id, settings):
 class HostLink:
     """Owns the single mod-host connection, only while a page or a change needs it."""
 
-    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic):
+    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None):
         self.model = model
         self.client = client
         self.store = store
         self.units_ready = units_ready
         self.clock = clock
+        self.midi = midi
         self.baselines = {(p['kind'], p['instance'], param_name(p, q)): q['baseline']
-                          for p in meta['plugins'] for q in p['params']}
+                          for p in meta['plugins'] for q in p['params'] if 'cc' not in q}
         self.port_params = [(p['instance'], q['symbol'])
-                            for p in meta['plugins'] if p['kind'] == 'port' for q in p['params']]
+                            for p in meta['plugins'] if p['kind'] == 'port' for q in p['params'] if 'cc' not in q]
+        self.cc_params = cc_controls(meta)
+        for number, param in self.cc_params.items():
+            self.model.update(f'cc:{number}', store.data['cc'].get(str(number), param['baseline']))
         self.mapped = [(m['instance'], m['symbol']) for m in meta['cc_map']]
         self.reverb_baselines = reverb_baselines(meta)
         self.default_reverb = meta.get('default_reverb')
@@ -275,7 +290,12 @@ class HostLink:
         params = dict(self.store.data['params'])
         patch_params = dict(self.store.data['patch_params'])
         tuned = dict(self.store.data['reverb_params'].get(self.current_reverb, {}))
+        ccs = dict(self.store.data['cc'])
         self.store.clear()
+        for number in ccs:
+            param = self.cc_params.get(int(number))
+            if param is not None and self.midi is not None and send_cc(self.midi, param, param['baseline']):
+                self.model.update(f'cc:{number}', param['baseline'])
         with self._lock:
             self._sets.clear()
             self._reverb = None
@@ -302,6 +322,12 @@ class HostLink:
         with self._lock:
             sets, self._sets = self._sets, {}
         for (kind, instance, name), value in sets.items():
+            if kind == 'cc':
+                param = self.cc_params.get(int(name))
+                if param is not None and self.midi is not None and send_cc(self.midi, param, value):
+                    self.model.update(f'cc:{name}', value)
+                    self.store.set_cc(int(name), value, param['baseline'])
+                continue
             if kind == 'port' and instance == reverbs.REVERB_INSTANCE:
                 baseline = self.reverb_baselines.get(self.current_reverb, {}).get(name)
                 if self.client.param_set(instance, name, value) == 0:
@@ -354,7 +380,9 @@ class App:
             patch = parse_patch(f.read())
         self.meta = load_metadata(args.params, patch)
         self.ranges = {(p['kind'], p['instance'], param_name(p, q)): (q['min'], q['max'])
-                       for p in self.meta['plugins'] for q in p['params']}
+                       for p in self.meta['plugins'] for q in p['params'] if 'cc' not in q}
+        self.ranges.update({('cc', p['instance'], str(q['cc'])): (q['min'], q['max'])
+                            for p in self.meta['plugins'] for q in p['params'] if 'cc' in q})
         self.reverb_ranges = {r['id']: {q['symbol']: (q['min'], q['max']) for q in r['params']}
                               for r in self.meta['reverbs']}
         self.model = Model()
@@ -365,7 +393,8 @@ class App:
             self.model.update(f'patch:{instance}:{uri}', value)
         self.client = HostClient(('127.0.0.1', args.host_port))
         self.link = HostLink(self.model, self.client, self.meta, self.store,
-                             units_ready or systemd_units_ready)
+                             units_ready or systemd_units_ready,
+                             midi=RawMidi(args.midi_device or find_device()))
         self.monitor = MidiMonitor(self.on_midi, command=monitor_command)
         self.cc_targets = {(m.channel, m.cc): (m.instance, m.symbol) for m in patch.cc_map}
         self.active_notes = set()
@@ -401,7 +430,9 @@ class App:
             try:
                 instance = int(change['instance'])
                 value = float(change['value'])
-                if 'symbol' in change:
+                if 'cc' in change:
+                    kind, name = 'cc', str(int(change['cc']))
+                elif 'symbol' in change:
                     kind, name = 'port', str(change['symbol'])
                 else:
                     kind, name = 'patch', str(change['uri'])
@@ -586,8 +617,15 @@ def restore(args):
     default_reverb = meta['default_reverb']
     reverb_id = data['reverb'] if data['reverb'] in reverb_baselines(meta) else default_reverb
     reverb_settings = data['reverb_params'].get(reverb_id, {}) if reverb_id else {}
+    ccs = cc_controls(meta) if 'plugins' in meta else {}
+    saved_ccs = {int(n): v for n, v in data['cc'].items() if int(n) in ccs}
+    if saved_ccs:
+        midi = RawMidi(args.midi_device or find_device())
+        sent = sum(send_cc(midi, ccs[n], v) for n, v in saved_ccs.items())
+        midi.close()
+        print(f'kiwi-web: sent {sent} of {len(saved_ccs)} saved CC(s)', flush=True)
     if not data['params'] and not data['patch_params'] and reverb_id == default_reverb and not reverb_settings:
-        print('kiwi-web: nothing to restore', flush=True)
+        print('kiwi-web: nothing more to restore', flush=True)
         return 0
     client = HostClient(('127.0.0.1', args.host_port))
     deadline = time.monotonic() + 60
@@ -639,6 +677,8 @@ def parse_args(argv=None):
     parser.add_argument('--static', default=os.path.join(web, 'static'))
     parser.add_argument('--state', default=os.path.expanduser('~/.local/state/kiwi/state.json'))
     parser.add_argument('--save-delay', type=float, default=5.0)
+    parser.add_argument('--midi-device', default=None,
+                        help='raw MIDI device for CC controls (default: the VirMIDI card)')
     parser.add_argument('--restore', action='store_true')
     return parser.parse_args(argv)
 

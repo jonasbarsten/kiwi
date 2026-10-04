@@ -27,6 +27,9 @@ PARAMS = {'plugins': [
         {'symbol': 'piano_vol', 'name': 'Piano Volume', 'min': 0, 'max': 1, 'default': 0.5, 'type': 'float'}]},
     {'instance': 3, 'title': 'Vocoder carrier', 'kind': 'port', 'params': [
         {'symbol': 'blend', 'name': 'Blend', 'min': 0, 'max': 2, 'default': 0, 'type': 'float'}]},
+    {'instance': 1, 'title': 'Sampler', 'kind': 'port', 'params': [
+        {'symbol': 'release', 'name': 'Release', 'min': 0, 'max': 4, 'default': 0.1, 'type': 'float',
+         'cc': 105, 'group': 'envelope'}]},
     {'instance': 0, 'title': 'Pianoteq', 'kind': 'patch', 'params': [
         {'uri': 'https://www.modartt.com/lv2/Pianoteq8:Volume', 'name': 'Volume', 'group': 'Main',
          'min': 0, 'max': 1, 'default': 0.72, 'curated': True}]},
@@ -61,9 +64,10 @@ class ServerTest(unittest.TestCase):
             f.write('<!doctype html><title>kiwi</title>')
         self.host = FakeHost({(5, 'piano_vol'): 0.8, (3, 'blend'): 0.0, (6, 'MID_RT60'): 3.0})
         self.state_path = os.path.join(self.dir.name, 'state', 'state.json')
+        self.midi_path = os.path.join(self.dir.name, 'midi')
         args = parse_args(['--port', '0', '--host-port', str(self.host.port), '--patch', paths['kiwi.patch'],
                            '--params', paths['params.json'], '--static', static,
-                           '--state', self.state_path, '--save-delay', '0.2'])
+                           '--state', self.state_path, '--save-delay', '0.2', '--midi-device', self.midi_path])
         self.app = App(args, units_ready=lambda: True,
                        monitor_command=[sys.executable, '-c', 'import time; time.sleep(60)'])
         threading.Thread(target=self.app.link.run, daemon=True).start()
@@ -117,7 +121,7 @@ class ServerTest(unittest.TestCase):
         meta = json.loads(body)
         mix = meta['plugins'][0]['params'][0]
         self.assertEqual(mix['baseline'], 0.8)
-        self.assertEqual(meta['plugins'][2]['params'][0]['baseline'], 0.72)
+        self.assertEqual(meta['plugins'][3]['params'][0]['baseline'], 0.72)
         self.assertEqual(meta['cc_map'][0]['cc'], 20)
         self.assertEqual(meta['default_reverb'], 'zita')
         self.assertEqual(meta['reverbs'][0]['params'][0]['baseline'], 3.0)   # patch value for the default reverb
@@ -162,6 +166,22 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.host.instances.get(6) == ZITA))
         self.request('POST', '/reverb', {'id': 'calf'})
         self.assertTrue(wait_for(lambda: self.host.params.get((6, 'decay_time')) == 0.9))
+
+    def test_cc_control_writes_midi_and_saves(self):
+        conn, response = self.open_events()
+        self.assertEqual(self.read_until(response, 'cc:105')['cc:105'], 0.1)   # the default
+        status, _ = self.request('POST', '/set', {'changes': [{'instance': 1, 'cc': 105, 'value': 2.0}]})
+        self.assertEqual(status, 204)
+        self.assertEqual(self.read_until(response, 'cc:105')['cc:105'], 2.0)
+        self.assertTrue(wait_for(lambda: os.path.exists(self.midi_path) and os.path.getsize(self.midi_path) >= 3))
+        with open(self.midi_path, 'rb') as f:
+            self.assertEqual(f.read(), b'\xb0\x69\x40')   # channel 1, CC 105, 2.0 of 0..4 → 64
+        self.assertTrue(wait_for(lambda: os.path.exists(self.state_path)))
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f)['cc'], {'105': 2.0})
+        status, _ = self.request('POST', '/set', {'changes': [{'instance': 1, 'cc': 7, 'value': 1}]})
+        self.assertEqual(status, 400, 'only the listed CCs may be sent')
+        conn.close()
 
     def test_unknown_reverb_rejected(self):
         status, _ = self.request('POST', '/reverb', {'id': 'nope'})
@@ -297,11 +317,14 @@ class RestoreTest(unittest.TestCase):
             with open(state, 'w') as f:
                 # '6:decay' is a stale entry from before per-reverb settings: it must be ignored.
                 json.dump({'params': {'5:piano_vol': 0.3, '6:decay': 1.6}, 'reverb': 'calf',
-                           'reverb_params': {'calf': {'decay_time': 0.9}}}, f)
+                           'reverb_params': {'calf': {'decay_time': 0.9}}, 'cc': {'105': 4.0}}, f)
             host = FakeHost({(5, 'piano_vol'): 0.8, (6, 'MID_RT60'): 3.0})
-            args = parse_args(['--state', state, '--host-port', str(host.port),
+            midi = os.path.join(tmp, 'midi')
+            args = parse_args(['--state', state, '--host-port', str(host.port), '--midi-device', midi,
                                '--patch', paths['kiwi.patch'], '--params', paths['params.json']])
             self.assertEqual(restore(args), 0)
+            with open(midi, 'rb') as f:
+                self.assertEqual(f.read(), b'\xb0\x69\x7f')
             self.assertEqual(host.instances.get(6), CALF)
             self.assertEqual(host.params.get((6, 'decay_time')), 0.9)
             self.assertEqual(host.params.get((5, 'piano_vol')), 0.3)

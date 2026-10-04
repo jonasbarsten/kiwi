@@ -130,6 +130,18 @@ class BuildTest(unittest.TestCase):
         self.assertEqual([p['symbol'] for p in calf['params']], ['decay_time', 'truepeak'])  # dry is locked
         self.assertNotIn(6, [p['instance'] for p in meta['plugins']])
 
+    def test_sampler_gets_cc_envelope_controls(self):
+        from kiwi_web.patchfile import parse_patch
+        patch = parse_patch('add http://sfztools.github.io/sfizz 1\nadd urn:dragonfly:plate 6\n')
+        meta = gen_params.build(patch, lambda uri: LV2INFO, TTL,
+                                port_plugins=[(1, 'Sampler', {'amp_attack'}, set())])
+        sampler = meta['plugins'][0]
+        ccs = [p for p in sampler['params'] if 'cc' in p]
+        self.assertEqual([(p['cc'], p['symbol']) for p in ccs],
+                         [(102, 'attack'), (103, 'decay'), (104, 'sustain'), (105, 'release')])
+        self.assertEqual(ccs[2]['default'], 100.0)
+        self.assertEqual(ccs[0]['group'], 'envelope')
+
     def test_default_reverb_must_be_known(self):
         from kiwi_web.patchfile import parse_patch
         patch = parse_patch('add urn:unknown:reverb 6\n')

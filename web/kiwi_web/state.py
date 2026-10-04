@@ -10,7 +10,7 @@ import time
 
 def _empty():
     return {'params': {}, 'patch_params': {}, 'preset': None, 'favourites': [],
-            'reverb': None, 'reverb_params': {}}
+            'reverb': None, 'reverb_params': {}, 'cc': {}}
 
 
 def _is_number(value):
@@ -53,6 +53,9 @@ class StateStore:
                 self.data['favourites'] = [u for u in loaded['favourites'] if isinstance(u, str)]
             if isinstance(loaded.get('reverb'), str):
                 self.data['reverb'] = loaded['reverb']
+            if isinstance(loaded.get('cc'), dict):
+                self.data['cc'] = {k: float(v) for k, v in loaded['cc'].items()
+                                   if str(k).isdigit() and _is_number(v)}
             if isinstance(loaded.get('reverb_params'), dict):
                 for reverb_id, settings in loaded['reverb_params'].items():
                     if isinstance(reverb_id, str) and isinstance(settings, dict):
@@ -76,6 +79,9 @@ class StateStore:
 
     def set_patch_param(self, instance, uri, value, baseline):
         self._store(self.data['patch_params'], f'{instance}:{uri}', value, baseline)
+
+    def set_cc(self, number, value, baseline):
+        self._store(self.data['cc'], str(number), value, baseline)
 
     def set_reverb(self, reverb_id):
         self.data['reverb'] = reverb_id

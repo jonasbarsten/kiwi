@@ -31,6 +31,15 @@ PORT_PLUGINS = [
                     'sample_quality', 'oscillator_quality'}, set()),
     (2, 'Synth', None, set()),
 ]
+# The sampler's envelope is not a plugin port: kiwi.sfz binds it to these CCs
+# (ampeg_*_oncc), which the web UI sends through the virtual MIDI device.
+SAMPLER_INSTANCE = 1
+SAMPLER_CC_CONTROLS = [
+    {'cc': 102, 'symbol': 'attack', 'name': 'Attack', 'min': 0.0, 'max': 2.0, 'default': 0.0},
+    {'cc': 103, 'symbol': 'decay', 'name': 'Decay', 'min': 0.0, 'max': 4.0, 'default': 0.0},
+    {'cc': 104, 'symbol': 'sustain', 'name': 'Sustain', 'min': 0.0, 'max': 100.0, 'default': 100.0},
+    {'cc': 105, 'symbol': 'release', 'name': 'Release', 'min': 0.0, 'max': 4.0, 'default': 0.1},
+]
 PIANOTEQ_INSTANCE = 0
 PIANOTEQ_EXCLUDED = {'Reverb Switch'}
 PIANOTEQ_CURATED = ['Volume', 'Dynamics', 'Condition', 'Post Effect Gain', 'Unison Width',
@@ -112,6 +121,8 @@ def build(patch, lv2info, pianoteq_ttl, port_plugins=PORT_PLUGINS):
     for instance, title, only, never in port_plugins:
         params = [p for p in parse_lv2info(lv2info(patch.instances[instance]))
                   if (only is None or p['symbol'] in only) and p['symbol'] not in never]
+        if instance == SAMPLER_INSTANCE:
+            params = [dict(c, type='float', group='envelope') for c in SAMPLER_CC_CONTROLS] + params
         plugins.append({'instance': instance, 'title': title, 'kind': 'port', 'params': params})
     default = reverbs.find_by_uri(patch.instances.get(reverbs.REVERB_INSTANCE))
     if default is None:
