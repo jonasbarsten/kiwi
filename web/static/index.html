@@ -74,13 +74,23 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 input[type=range]::-moz-range-track { height: 10px; border-radius: 5px; background: var(--line); }
 input[type=range]::-moz-range-progress { height: 10px; border-radius: 5px; background: var(--flesh); }
+/* The thumb is a kiwi slice: fuzzy rim, green flesh, cream core, a ring of seeds. */
 input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 24px; height: 34px; margin-top: -12px;
-  border-radius: 50% / 60% 60% 40% 40%; background: var(--seed); border: 2px solid var(--core);
+  -webkit-appearance: none; width: 32px; height: 32px; margin-top: -11px; border-radius: 50%;
+  border: 3px solid var(--fuzz); background-color: var(--flesh);
+  background-image:
+    radial-gradient(circle, var(--core) 0 22%, transparent 23%),
+    radial-gradient(circle, transparent 0 42%, var(--flesh) 43%),
+    repeating-conic-gradient(var(--seed) 0 8deg, transparent 8deg 36deg),
+    radial-gradient(circle, var(--flesh-hi) 0 45%, var(--flesh) 46%);
 }
 input[type=range]::-moz-range-thumb {
-  width: 24px; height: 34px; border-radius: 50% / 60% 60% 40% 40%;
-  background: var(--seed); border: 2px solid var(--core);
+  width: 32px; height: 32px; border-radius: 50%; border: 3px solid var(--fuzz); background-color: var(--flesh);
+  background-image:
+    radial-gradient(circle, var(--core) 0 22%, transparent 23%),
+    radial-gradient(circle, transparent 0 42%, var(--flesh) 43%),
+    repeating-conic-gradient(var(--seed) 0 8deg, transparent 8deg 36deg),
+    radial-gradient(circle, var(--flesh-hi) 0 45%, var(--flesh) 46%);
 }
 .unknown input[type=range]::-webkit-slider-thumb { opacity: .45; }
 .unknown input[type=range]::-moz-range-thumb { opacity: .45; }

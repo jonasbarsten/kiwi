@@ -30,6 +30,13 @@ done
 amidi -p "$device" -S "B0 40 00"
 sleep 4
 
-errors=$(journalctl -u jack --since "$start" --no-pager | grep -cE "XRun|Process error")
+lines=$(journalctl -u jack --since "$start" --no-pager -o short-precise | grep -E "XRun|Process error")
+errors=$(printf '%s' "$lines" | grep -c .)
 echo "kiwi-stress: ${duration}s, ${errors} xrun/process-error lines"
+if [ "$errors" -gt 0 ]; then
+    # When they happened (one line per burst) and which JACK clients were late.
+    printf '%s\n' "$lines" | awk '{ print substr($3, 1, 12) }' | uniq -c | awk '{ printf "  %s x%d\n", $2, $1 }' | head -20
+    printf '%s\n' "$lines" | grep -oE "client =? ?effect_[0-9]+" | grep -oE "effect_[0-9]+" | sort | uniq -c | sort -rn \
+        | awk '{ printf "  late: %s (%d)\n", $2, $1 }'
+fi
 [ "$errors" -eq 0 ]

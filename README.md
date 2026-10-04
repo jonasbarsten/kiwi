@@ -181,7 +181,11 @@ journalctl -t kiwi-btn -b                 # button presses that failed to reach 
 ```
 
 The system journal lives in RAM (`system/journald-kiwi.conf`: 32 MB cap, gone at reboot); the
-persistent journal under `/var/log/journal` was removed by `install.sh`.
+persistent journal under `/var/log/journal` was removed by `install.sh`. To keep a copy of a
+session's logs, run `~/kiwi/host/kiwi-log` **after** playing: it writes this boot's audio,
+web and button logs to `~/kiwi-logs/<date>.log` (the one deliberate SD write) and prints an
+xrun summary; `kiwi-log xruns` prints only the summary, `kiwi-log follow` watches live.
+`kiwi-stress` now also lists when its xruns happened and which plugins were late.
 
 ## What `install.sh` turns off
 

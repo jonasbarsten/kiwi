@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# The journal lives in RAM and is gone at reboot. This keeps a copy when you want one.
+#
+#   kiwi-log            write this boot's journal (audio host, web UI, JACK, button,
+#                       MIDI routing) to ~/kiwi-logs/<date>.log, then show xrun summary
+#   kiwi-log xruns      only print the xrun summary for this boot
+#   kiwi-log follow     watch JACK and the audio host live
+#
+# Writing the file is the one SD-card write this does; run it after playing, not during.
+set -u
+
+# "+" ORs the match groups: journalctl would otherwise AND a -t filter with the -u ones.
+units=(-u jack -u kiwi-host -u kiwi-patch -u kiwi-restore -u kiwi-web -u amidiminder -u rtpmidid + -t kiwi-btn)
+
+xruns() {
+    lines=$(journalctl -u jack -b --no-pager -o short-precise | grep -E "XRun|Process error")
+    count=$(printf '%s' "$lines" | grep -c .)
+    echo "xrun/process-error lines this boot: $count"
+    if [ "$count" -gt 0 ]; then
+        echo "bursts (time x lines):"
+        printf '%s\n' "$lines" | awk '{ print substr($3, 1, 12) }' | uniq -c | awk '{ printf "  %s x%d\n", $2, $1 }' | tail -30
+        echo "late clients:"
+        printf '%s\n' "$lines" | grep -oE "client =? ?effect_[0-9]+" | grep -oE "effect_[0-9]+" | sort | uniq -c | sort -rn \
+            | awk '{ printf "  %s (%d)\n", $2, $1 }'
+    fi
+}
+
+case "${1:-save}" in
+    save)
+        mkdir -p "$HOME/kiwi-logs"
+        file="$HOME/kiwi-logs/$(date +%Y-%m-%d_%H-%M-%S).log"
+        journalctl -b --no-pager -o short-precise "${units[@]}" > "$file"
+        sync
+        echo "wrote $file ($(wc -l < "$file") lines)"
+        xruns
+        ;;
+    xruns) xruns ;;
+    follow) journalctl -f -o short-precise -u jack -u kiwi-host -u kiwi-web + -t kiwi-btn ;;
+    *) echo "usage: kiwi-log [save|xruns|follow]" >&2; exit 2 ;;
+esac
