@@ -46,11 +46,21 @@ class PresetsTest(unittest.TestCase):
                     f.write(PRESET % label)
             os.mkdir(os.path.join(tmp, 'broken.lv2'))      # no manifest: skipped
             presets = index_presets(tmp)
-        self.assertEqual([p['name'] for p in presets], ['MKI Amped', 'MKII Spark'])
-        self.assertEqual(presets[0]['family'], 'Electric')
-        self.assertTrue(presets[0]['uri'].startswith('file://'))
-        self.assertTrue(presets[0]['uri'].endswith('Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'))
-        self.assertTrue(presets[0]['bundle'].endswith('Electric.lv2/'))
+            self.assertEqual([p['name'] for p in presets], ['MKI Amped', 'MKII Spark'])
+            self.assertEqual(presets[0]['family'], 'Electric')
+            self.assertTrue(presets[0]['uri'].startswith('file://'))
+            self.assertTrue(presets[0]['uri'].endswith('Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'))
+            self.assertEqual(presets[0]['bundle'], bundle)
+
+            # With a link root, bundle_add gets a space-free symlink to the real bundle.
+            links = os.path.join(tmp, 'links')
+            linked = index_presets(tmp, link_root=links)
+            self.assertEqual(linked[0]['bundle'], os.path.join(links, 'pianoteq-8-factory-presets-electric.lv2'))
+            self.assertNotIn(' ', linked[0]['bundle'])
+            self.assertEqual(os.readlink(linked[0]['bundle']), bundle)
+            self.assertTrue(linked[0]['uri'].endswith('Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'),
+                            'the preset URI stays the real, canonical file')
+            index_presets(tmp, link_root=links)     # idempotent
 
     def test_missing_root_is_empty(self):
         self.assertEqual(index_presets('/nonexistent'), [])
@@ -71,9 +81,9 @@ class PresetsTest(unittest.TestCase):
 
     def test_load_commands(self):
         uri = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'
-        bundle = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/'
+        bundle = '/x/links/pianoteq-8-factory-presets-electric.lv2'
         self.assertEqual(load_commands(uri, bundle), [
-            'bundle_add /x/Pianoteq%208-factory-presets-Electric.lv2/',
+            'bundle_add /x/links/pianoteq-8-factory-presets-electric.lv2/',
             f'preset_load 0 {uri}',
             'patch_set 0 https://www.modartt.com/lv2/Pianoteq8:Reverb_20Switch 0.000000',
         ])

@@ -2,8 +2,13 @@
 
 One bundle per instrument family: `<root>/Pianoteq 8-factory-presets-<Family>.lv2/`
 with a `manifest.ttl` (bank label + one entry per preset file) and one `.ttl` per
-preset (its `rdfs:label` is the display name). mod-host loads a preset by the
-`file://` URI of that file, percent-encoded, after `bundle_add` of its bundle.
+preset (its `rdfs:label` is the display name).
+
+mod-host's `bundle_add` takes a plain filesystem path (it percent-encodes it
+itself, so an encoded path loads nothing) and splits commands on spaces, so the
+bundles are reached through space-free symlinks (`<link_root>/<family>.lv2`).
+lilv canonicalises the symlink, so `preset_load` then takes the `file://` URI of
+the real preset file, percent-encoded.
 """
 import json
 import os
@@ -26,14 +31,24 @@ def encode_path(path):
     return 'file://' + quote(path, safe='/')
 
 
-def index_presets(root):
+def slug(text):
+    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-') or 'bundle'
+
+
+def index_presets(root, link_root=None):
     """[{'uri', 'name', 'family', 'bundle'}] for every preset under `root`,
-    ordered by family then name. Missing or unreadable bundles are skipped."""
+    ordered by family then name. Missing or unreadable bundles are skipped.
+
+    `bundle` is the plain path to give `bundle_add`: a space-free symlink under
+    `link_root` (created here) when given, else the real directory.
+    """
     presets = []
     try:
         bundles = sorted(d for d in os.listdir(root) if d.endswith('.lv2'))
     except OSError:
         return presets
+    if link_root:
+        os.makedirs(link_root, exist_ok=True)
     for bundle in bundles:
         directory = os.path.join(root, bundle)
         try:
@@ -43,6 +58,13 @@ def index_presets(root):
             continue
         bank = _BANK.search(manifest)
         family = bank.group(1) if bank else bundle
+        bundle_path = directory
+        if link_root:
+            bundle_path = os.path.join(link_root, slug(bundle[:-4]) + '.lv2')
+            if os.path.islink(bundle_path) and os.readlink(bundle_path) != directory:
+                os.remove(bundle_path)
+            if not os.path.lexists(bundle_path):
+                os.symlink(directory, bundle_path)
         for filename in _ENTRY.findall(manifest):
             path = os.path.join(directory, filename)
             name = filename[:-4].replace('_', ' ')
@@ -54,16 +76,17 @@ def index_presets(root):
             except OSError:
                 continue
             presets.append({'uri': encode_path(path), 'name': name, 'family': family,
-                            'bundle': encode_path(directory) + '/'})
+                            'bundle': bundle_path})
     presets.sort(key=lambda p: (p['family'].lower(), p['name'].lower()))
     return presets
 
 
 def load_commands(uri, bundle):
     """mod-host commands that load a preset into Pianoteq and keep its own
-    reverb off (presets carry their own reverb setting)."""
+    reverb off (presets carry their own reverb setting). `bundle` is a plain,
+    space-free directory path."""
     return [
-        f"bundle_add {bundle[len('file://'):]}",
+        f"bundle_add {bundle.rstrip('/')}/",
         f'preset_load {PIANOTEQ_INSTANCE} {uri}',
         f'patch_set {PIANOTEQ_INSTANCE} {REVERB_SWITCH} 0.000000',
     ]

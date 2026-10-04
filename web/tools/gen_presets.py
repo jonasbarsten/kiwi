@@ -13,7 +13,8 @@ DEFAULT_ROOT = '/home/patch/kiwi-data/pianoteq-presets'
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ROOT
-    presets = index_presets(root)
+    # Space-free symlinks to the bundles, next to the export (see kiwi_web.presets).
+    presets = index_presets(root, link_root=root.rstrip('/') + '-bundles')
     if not presets:
         print(f'gen_presets: no presets found under {root}', file=sys.stderr)
     json.dump({'presets': presets}, sys.stdout)

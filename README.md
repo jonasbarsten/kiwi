@@ -44,7 +44,7 @@ From this repo on your machine:
 ```bash
 rsync -a --delete --exclude backup --exclude legacy --exclude pure-data --exclude Cookbook \
   --exclude SwiftCrossCompilers --exclude .git --exclude .superpowers --exclude plugins/kiwi/build \
-  --exclude web/params.json --exclude __pycache__ \
+  --exclude web/params.json --exclude web/presets.json --exclude __pycache__ \
   ./ patch@192.168.1.126:kiwi/
 ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh'
 ```
@@ -128,6 +128,18 @@ a full-screen app.
   Pianoteq values show "–" until set from the page (mod-host cannot read them back).
   Sliders apply while you drag: Pianoteq and reverb changes at most every 150 ms (they
   recompute inside the audio thread), everything else every 50 ms.
+- **Pianoteq presets**: the Pianoteq section starts with the current preset, ◀ ▶ and a
+  browser (☰) with a family dropdown, search and ★ stars. ◀ ▶ step through the starred
+  presets (or, with none starred, the current family). The chosen preset is part of the
+  slot and comes back at boot; a slot's Pianoteq parameter tweaks apply on top of its
+  preset. Favourites are global and are written only when you star or unstar (the one
+  deliberate write besides save/select). Presets of instruments you do not own play in
+  Pianoteq's demo mode. `install.sh` exports all presets from the Pianoteq standalone into
+  `~/kiwi-data/pianoteq-presets` (re-exported when Pianoteq is updated) and lists them in
+  `web/presets.json`, with space-free symlinks to the bundles in
+  `~/kiwi-data/pianoteq-presets-bundles` (mod-host's `bundle_add` cannot take a path with
+  spaces or percent-encoding). A `preset_load 0 <uri>` line in `kiwi.patch` would make that preset the
+  baseline; without one, a slot without a preset leaves the piano as it is.
 - **Presets**: see the next section. A dot marks values that differ from `host/kiwi.patch`;
   **Reset to patch** puts them back live (RAM only; the saved preset is untouched).
 - Only private-network addresses are served, and changes are only accepted from the page

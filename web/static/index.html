@@ -147,6 +147,17 @@ footer {
 .slots button b { width: 28px; flex: none; }
 .slots button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (min-width: 768px) { .slots { grid-template-columns: repeat(4, 1fr); } }
+/* Pianoteq preset bar and browser (inside the Pianoteq section). */
+.presets .pname { font-size: 17px; font-weight: 600; min-height: 44px; display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pbrowser { display: grid; gap: 8px; padding: 0 0 8px; }
+.pbrowser input[type=search] {
+  font: inherit; font-size: 16px; min-height: 44px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--core);
+}
+.plist { display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.prow { display: grid; grid-template-columns: 1fr 48px; gap: 6px; }
+.prow button { text-align: left; min-height: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow button:last-child { text-align: center; padding: 0; font-size: 20px; }
 @media (min-width: 768px) {
   main { grid-template-columns: 1fr 1fr; padding-left: 16px; padding-right: 16px; }
   .modes { grid-template-columns: repeat(3, 1fr); }
@@ -478,7 +489,7 @@ function build() {
     if (p.instance === 5 || p.instance === 3) continue;
     if (p.kind === 'patch') {
       const note = 'Pianoteq values are shown once set from this page.';
-      section('Pianoteq', (d) => addGrouped(d, p, p.params.filter((q) => q.curated)), note);
+      section('Pianoteq', (d) => { buildPresetBar(d); addGrouped(d, p, p.params.filter((q) => q.curated)); }, note);
       section('Pianoteq · all parameters', (d) => addGrouped(d, p, p.params), note);
     } else {
       section(p.title, (d) => addGrouped(d, p, p.params));
@@ -587,6 +598,12 @@ function apply(delta) {
     } else if (key.startsWith('slot:') || key === 'morph:value') {
       slotState[key] = v;
       renderSlots();
+    } else if (key === 'preset:current') {
+      presetState.current = v;
+      renderPresetBar();
+    } else if (key === 'preset:favourites') {
+      presetState.favourites = v;
+      renderPresetFamilies();
     } else if (key === 'midi:notes') {
       lightSeeds(v);
     } else if (key === 'midi:last') {
@@ -701,6 +718,131 @@ $('morph').addEventListener('input', () => {
   morphTimer = setTimeout(() => { morphTimer = null; post('/morph', { value: parseFloat($('morph').value) }); }, 60);
 });
 
+// ----- Pianoteq presets --------------------------------------------------------
+
+let presetList = [];          // from /presets.json: {uri, name, family, bundle}
+const presetState = { current: null, favourites: [] };
+let presetUi = null;          // {name, browser, family, search, list}
+
+function presetByUri(uri) { return presetList.find((p) => p.uri === uri); }
+
+function presetRing() {
+  // What ◀ ▶ step through: the favourites, or the current preset's family, or all.
+  if (presetState.favourites.length) return presetState.favourites;
+  const current = presetByUri(presetState.current);
+  const family = current ? presetList.filter((p) => p.family === current.family) : presetList;
+  return family.map((p) => p.uri);
+}
+
+function stepPreset(delta) {
+  const ring = presetRing();
+  if (!ring.length) return;
+  const at = ring.indexOf(presetState.current);
+  const next = ring[(at < 0 ? (delta > 0 ? 0 : ring.length - 1) : (at + delta + ring.length) % ring.length)];
+  post('/preset', { uri: next });
+}
+
+function buildPresetBar(container) {
+  const bar = document.createElement('div');
+  bar.className = 'presets';
+  const slot = document.createElement('div');
+  slot.className = 'slot';
+  const name = document.createElement('span');
+  name.className = 'pname';
+  slot.appendChild(name);
+  const nav = document.createElement('div');
+  nav.className = 'nav';
+  const prev = document.createElement('button');
+  prev.type = 'button'; prev.textContent = '◀'; prev.setAttribute('aria-label', 'previous piano preset');
+  prev.addEventListener('click', () => stepPreset(-1));
+  const next = document.createElement('button');
+  next.type = 'button'; next.textContent = '▶'; next.setAttribute('aria-label', 'next piano preset');
+  next.addEventListener('click', () => stepPreset(1));
+  const browse = document.createElement('button');
+  browse.type = 'button'; browse.textContent = '☰'; browse.setAttribute('aria-label', 'browse piano presets');
+  nav.append(prev, next, browse);
+  bar.append(slot, nav);
+
+  const browser = document.createElement('div');
+  browser.className = 'pbrowser';
+  browser.hidden = true;
+  const family = document.createElement('select');
+  const search = document.createElement('input');
+  search.type = 'search'; search.placeholder = 'search presets'; search.setAttribute('aria-label', 'search presets');
+  const list = document.createElement('div');
+  list.className = 'plist';
+  browser.append(family, search, list);
+  browse.addEventListener('click', () => { browser.hidden = !browser.hidden; });
+  family.addEventListener('change', renderPresetList);
+  search.addEventListener('input', renderPresetList);
+
+  const hint = document.createElement('p');
+  hint.className = 'note';
+  hint.textContent = '◀ ▶ step through starred presets (or the current family). The preset is saved with the slot.';
+  container.append(bar, browser, hint);
+  presetUi = { name, browser, family, search, list };
+  renderPresetFamilies();
+  renderPresetBar();
+}
+
+function renderPresetFamilies() {
+  if (!presetUi) return;
+  const families = [...new Set(presetList.map((p) => p.family))];
+  presetUi.family.replaceChildren();
+  const star = document.createElement('option');
+  star.value = '★'; star.textContent = '★ favourites';
+  presetUi.family.appendChild(star);
+  for (const f of families) {
+    const option = document.createElement('option');
+    option.value = f; option.textContent = f;
+    presetUi.family.appendChild(option);
+  }
+  const current = presetByUri(presetState.current);
+  presetUi.family.value = presetState.favourites.length ? '★' : (current ? current.family : families[0] || '★');
+  renderPresetList();
+}
+
+function renderPresetList() {
+  if (!presetUi) return;
+  const family = presetUi.family.value;
+  const query = presetUi.search.value.trim().toLowerCase();
+  let items = family === '★' ? presetState.favourites.map(presetByUri).filter(Boolean)
+                             : presetList.filter((p) => p.family === family);
+  if (query) items = presetList.filter((p) => `${p.family} ${p.name}`.toLowerCase().includes(query));
+  presetUi.list.replaceChildren();
+  for (const p of items.slice(0, 200)) {
+    const row = document.createElement('div');
+    row.className = 'prow';
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.classList.toggle('on', p.uri === presetState.current);
+    pick.textContent = query ? `${p.family} · ${p.name}` : p.name;
+    pick.addEventListener('click', () => post('/preset', { uri: p.uri }));
+    const star = document.createElement('button');
+    star.type = 'button';
+    const starred = presetState.favourites.includes(p.uri);
+    star.textContent = starred ? '★' : '☆';
+    star.classList.toggle('on', starred);
+    star.setAttribute('aria-label', starred ? 'remove from favourites' : 'add to favourites');
+    star.addEventListener('click', () => post('/favourite', { uri: p.uri, on: !starred }));
+    row.append(pick, star);
+    presetUi.list.appendChild(row);
+  }
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'note';
+    empty.textContent = family === '★' && !query ? 'No favourites yet: star presets in a family.' : 'Nothing found.';
+    presetUi.list.appendChild(empty);
+  }
+}
+
+function renderPresetBar() {
+  if (!presetUi) return;
+  const current = presetByUri(presetState.current);
+  presetUi.name.textContent = current ? `${current.family} · ${current.name}` : 'Pianoteq default';
+  renderPresetList();
+}
+
 function load() {
   fetch('/params.json')
     .then((response) => {
@@ -709,6 +851,10 @@ function load() {
     })
     .then((data) => {
       meta = data;
+      return fetch('/presets.json').then((r) => (r.ok ? r.json() : { presets: [] })).catch(() => ({ presets: [] }));
+    })
+    .then((data) => {
+      presetList = data.presets || [];
       build();
       drawSlice();
       if (!document.hidden) connect();

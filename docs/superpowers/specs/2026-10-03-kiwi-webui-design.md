@@ -151,6 +151,13 @@ the defaults.
 
 ## 5. Pianoteq presets
 
+*Built 2026-10-04 on top of the slot system (`2026-10-04-kiwi-presets-design.md`): the
+preset is a field of the slot document, applied as a `('preset', uri)` operation after the
+reverb and before Pianoteq's parameters; favourites are global in
+`~/.local/state/kiwi/favourites.json`; no mute sequence (the spike showed none is needed);
+◀ ▶ step through favourites, or the current family when nothing is starred; a
+`preset_load 0 <uri>` line in `kiwi.patch` is the optional baseline.*
+
 - **Export** (one-time, `install.sh`): the Pianoteq standalone exports all presets as LV2
   presets into `~/kiwi-data/pianoteq-presets`, **outside** `LV2_PATH` so mod-host's boot does
   not parse ~650 preset files. Skipped when already exported for the installed Pianoteq version.

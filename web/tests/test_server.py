@@ -45,10 +45,8 @@ SLEEPER = [sys.executable, '-c', 'import time; time.sleep(60)']
 PRESET_A = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'
 PRESET_B = 'file:///x/Pianoteq%208-factory-presets-Steinway%20D.lv2/HB_Steinway_D_Blues.ttl'
 PRESETS = {'presets': [
-    {'uri': PRESET_A, 'name': 'MKI Amped', 'family': 'Electric',
-     'bundle': 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/'},
-    {'uri': PRESET_B, 'name': 'HB Steinway D Blues', 'family': 'Steinway D',
-     'bundle': 'file:///x/Pianoteq%208-factory-presets-Steinway%20D.lv2/'},
+    {'uri': PRESET_A, 'name': 'MKI Amped', 'family': 'Electric', 'bundle': '/x/links/electric.lv2'},
+    {'uri': PRESET_B, 'name': 'HB Steinway D Blues', 'family': 'Steinway D', 'bundle': '/x/links/steinway-d.lv2'},
 ]}
 
 
@@ -475,7 +473,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.post('/preset', {'uri': PRESET_A}), 204)
         self.assertEqual(self.read_until(response, 'preset:current', PRESET_A)['preset:current'], PRESET_A)
         self.assertEqual(self.host.preset, PRESET_A)
-        self.assertIn('/x/Pianoteq%208-factory-presets-Electric.lv2/', self.host.bundles)
+        self.assertIn('/x/links/electric.lv2/', self.host.bundles)
         self.assertEqual(self.host.patch.get((0, 'https://www.modartt.com/lv2/Pianoteq8:Reverb_20Switch')), 0.0)
         self.assertTrue(self.read_until(response, 'slot:dirty', True)['slot:dirty'])
         self.assertEqual(self.app.store.data['preset'], PRESET_A)

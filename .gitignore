@@ -12,6 +12,7 @@ legacy/swift_kiwi/.build/
 
 # Web UI
 web/params.json
+web/presets.json
 __pycache__/
 
 # Plan execution scratch

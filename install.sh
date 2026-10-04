@@ -149,9 +149,29 @@ sudo install -m 644 "$KIWI_DIR/system/pisound.conf" /etc/pisound.conf
 sudo systemctl restart pisound-btn
 sudo rm -f /etc/tmpfiles.d/kiwi.conf   # the LED permission is now set by kiwi-web.service
 
+section "Pianoteq presets"
+# Exported as LV2 preset bundles, outside LV2_PATH so mod-host's boot does not parse
+# them; re-exported when the Pianoteq version changes. ~2 s, 3 MB.
+presets_dir="$HOME/kiwi-data/pianoteq-presets"
+pianoteq="$HOME/.vst/Pianoteq 8"
+if [ -x "$pianoteq" ]; then
+    version=$("$pianoteq" --version 2>/dev/null | head -1)
+    if [ "$(cat "$presets_dir/.pianoteq-version" 2>/dev/null)" != "$version" ]; then
+        mkdir -p "$presets_dir"
+        (cd /tmp && env -u JACK_PROMISCUOUS_SERVER nice -n 19 ionice -c3 \
+            "$pianoteq" --headless --export-lv2-presets "$presets_dir" --export-presets-filter all > /dev/null 2>&1)
+        printf '%s\n' "$version" > "$presets_dir/.pianoteq-version"
+    fi
+    echo "$(ls -d "$presets_dir"/*.lv2 2>/dev/null | wc -l) preset bundles"
+else
+    echo "Pianoteq standalone not found at $pianoteq: no presets exported"
+fi
+
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"
 mv "$KIWI_DIR/web/params.json.tmp" "$KIWI_DIR/web/params.json"
+python3 "$KIWI_DIR/web/tools/gen_presets.py" "$presets_dir" > "$KIWI_DIR/web/presets.json.tmp"
+mv "$KIWI_DIR/web/presets.json.tmp" "$KIWI_DIR/web/presets.json"
 mkdir -p "$HOME/.local/state/kiwi"
 sudo install -m 644 "$KIWI_DIR/system/kiwi-web.service" "$KIWI_DIR/system/kiwi-restore.service" /etc/systemd/system/
 sudo systemctl daemon-reload
