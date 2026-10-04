@@ -77,6 +77,7 @@ class StateStore:
         self.slot = 1
         self.data = _empty('Preset 1')
         self.dirty = False
+        self._others = {}       # slot -> document of a non-current slot, as last read from disk
 
     @staticmethod
     def split_key(key):
@@ -107,8 +108,16 @@ class StateStore:
         return [s['name'] for s in self.summaries()]
 
     def summaries(self):
-        """Name, Pianoteq preset and reverb of every slot (the current one from RAM)."""
-        documents = [self.data if n == self.slot else self.read_slot(n) for n in range(1, self.slots + 1)]
+        """Name, Pianoteq preset and reverb of every slot (the current one from RAM).
+        Other slots are read from disk once; the only writers (save, select) drop the cache."""
+        documents = []
+        for n in range(1, self.slots + 1):
+            if n == self.slot:
+                documents.append(self.data)
+            else:
+                if n not in self._others:
+                    self._others[n] = self.read_slot(n)
+                documents.append(self._others[n])
         return [{'name': d['name'], 'preset': d.get('preset'), 'reverb': d.get('reverb')} for d in documents]
 
     def _migrate(self):
@@ -138,6 +147,7 @@ class StateStore:
         self.slot = slot
         self.data = self.read_slot(slot)
         self.dirty = False
+        self._others = {}
         return self.data
 
     def select(self, slot):
@@ -147,11 +157,13 @@ class StateStore:
         self.slot = slot
         self.data = self.read_slot(slot)
         self.dirty = False
+        self._others = {}
 
     def save(self):
         """Writes RAM into the current slot's file."""
         _write_atomic(self._slot_path(self.slot), json.dumps(self.data, indent=1, sort_keys=True))
         self.dirty = False
+        self._others = {}
 
     def _touch(self):
         self.dirty = True

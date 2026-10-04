@@ -236,6 +236,7 @@ class HostLink:
         self._step = 0
         self._save = False
         self._morph = None
+        self._morph_slots = None                 # (slot, document, next document) cached for morphing
         self._name = None
         self._preset = None
         self._host_token = None
@@ -409,6 +410,7 @@ class HostLink:
             # RAM edits are gone from the instrument, so RAM follows.
             self.store.load()
             self.current_reverb = self.applier.effective_reverb(self.store.data)
+            self._morph_slots = None
             with self._lock:
                 self._sets.clear()
                 self._reads.clear()
@@ -527,6 +529,7 @@ class HostLink:
             slot = (self.store.slot - 1 + step) % self.store.slots + 1
         previous = json.loads(json.dumps(self.store.data))
         self.store.select(slot)
+        self._morph_slots = None
         with self._lock:
             self._sets.clear()
             self._reads.clear()
@@ -546,6 +549,7 @@ class HostLink:
         if not save:
             return
         self.store.save()
+        self._morph_slots = None
         self._publish_state()
         self.led.blink(SAVE_FLASHES, SAVE_FLASH_INTERVAL)
 
@@ -562,9 +566,14 @@ class HostLink:
             reverb_id, self._reverb = self._reverb, None
         if reverb_id is None or reverb_id == self.current_reverb:
             return
-        previous = json.loads(json.dumps(self.store.data))
-        self.store.set_reverb(reverb_id)
-        self._execute(self.applier.ops(previous, self.store.data, replace=False))
+        # RAM follows only once the slot really holds the new reverb.
+        target = json.loads(json.dumps(self.store.data))
+        target['reverb'] = reverb_id
+        self._execute(self.applier.ops(self.store.data, target, replace=False))
+        if self.current_reverb == reverb_id:
+            self.store.set_reverb(reverb_id)
+        else:
+            print(f'kiwi-web: mod-host refused reverb {reverb_id}', flush=True)
         self._publish_state()
 
     def _apply_preset(self):
@@ -585,18 +594,27 @@ class HostLink:
         if t is None:
             return
         slot = self.store.slot
-        a = self.store.read_slot(slot)
-        b = self.store.read_slot(slot % self.store.slots + 1)
+        # The two slot files are read once per selection, not once per CC tick.
+        if self._morph_slots is None or self._morph_slots[0] != slot:
+            self._morph_slots = (slot, self.store.read_slot(slot), self.store.read_slot(slot % self.store.slots + 1))
+        _, a, b = self._morph_slots
         target = self.applier.morph(a, b, t, self.current_reverb, preset=self.store.data['preset'])
-        self._execute(self.applier.ops(self.store.data, target, replace=False))
-        for key, value in target['params'].items():
-            instance, symbol = StateStore.split_key(key)
-            self.store.set_param(instance, symbol, value, self.applier.port[(instance, symbol)]['baseline'])
-        for number, value in target['cc'].items():
-            self.store.set_cc(int(number), value, self.applier.cc[int(number)]['baseline'])
-        for reverb_id, settings in target['reverb_params'].items():
-            for symbol, value in settings.items():
-                self.store.set_reverb_param(reverb_id, symbol, value, self.applier.reverb[reverb_id][symbol]['baseline'])
+        # RAM takes only what mod-host accepted.
+        applied = []
+
+        def on_applied(op):
+            self._on_applied(op)
+            applied.append(op)
+        execute_ops(self.client, self.midi, self.cc_params, self.applier.ops(self.store.data, target, replace=False),
+                    on_applied, self.bundles)
+        for op in applied:
+            if op[0] == 'port' and op[1] == reverbs.REVERB_INSTANCE:
+                baseline = self.applier.reverb.get(self.current_reverb, {}).get(op[2], {}).get('baseline')
+                self.store.set_reverb_param(self.current_reverb, op[2], op[3], baseline)
+            elif op[0] == 'port':
+                self.store.set_param(op[1], op[2], op[3], self.applier.port[(op[1], op[2])]['baseline'])
+            elif op[0] == 'cc':
+                self.store.set_cc(op[1], op[2], self.applier.cc[op[1]]['baseline'])
         self.model.update('morph:value', t)
         self._publish_state()
 

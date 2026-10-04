@@ -12,6 +12,7 @@ class FakeHost:
         self.midi_maps = {}         # (instance, symbol) -> (channel, cc, min, max)
         self.preset = None
         self.known_presets = None   # None: accept any preset URI; else a set
+        self.refuse_add = set()     # plugin URIs whose instantiation fails
         self.connections = []
         self.log = []
         self.chunks = []
@@ -75,6 +76,8 @@ class FakeHost:
         if parts[0] == 'cpu_load':
             return f'resp 0 {self.cpu:.4f}'
         if parts[0] == 'add':
+            if parts[1] in self.refuse_add:
+                return 'resp -102'
             instance = int(parts[2])
             self.instances[instance] = parts[1]
             return f'resp {instance}'

@@ -511,6 +511,34 @@ class ServerTest(unittest.TestCase):
         with open(self.slot_file(2), 'w') as f:
             json.dump({'params': {'5:piano_vol': 1.0, '3:blend': 2.0}, 'cc': {'105': 4.0}}, f)
 
+    def test_refused_reverb_leaves_ram_and_instrument_alone(self):
+        self.host.refuse_add.add(CALF)
+        self.assertEqual(self.post('/reverb', {'id': 'calf'}), 204)
+        self.assertTrue(wait_for(lambda: 'add ' + CALF + ' 6' in self.host.log))
+        time.sleep(0.2)
+        self.assertEqual(self.app.store.data['reverb'], None)
+        self.assertEqual(self.app.link.current_reverb, 'zita')
+        self.assertEqual(self.app.model.get('reverb:current'), 'zita')
+        self.assertFalse(self.app.store.dirty)
+
+    def test_morph_reads_slot_files_once_and_records_only_applied_values(self):
+        self.write_morph_slots()
+        reads = []
+        original = self.app.store.read_slot
+        self.app.store.read_slot = lambda n: (reads.append(n), original(n))[1]
+        del self.host.params[(3, 'blend')]           # mod-host no longer knows this port
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 27, 'value': 64})
+        self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - (0.2 + 0.8 * 64 / 127)) < 1e-6))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 27, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.host.params[(5, 'piano_vol')] == 1.0))
+        # Only the morph reads slot 1 (the summaries take the current slot from RAM): once.
+        self.assertEqual(reads.count(1), 1, 'two morph steps, one read of the slot file')
+        self.assertLessEqual(reads.count(3), 1, 'the slot summaries are cached between saves/selects')
+        self.assertNotIn('3:blend', self.app.store.data['params'], 'a refused value must not enter RAM')
+        self.assertEqual(self.app.store.data['params'].get('5:piano_vol'), 1.0)
+        self.assertEqual(self.post('/slot/save'), 204)
+        self.assertTrue(wait_for(lambda: self.app.link._morph_slots is None), 'a save invalidates the cache')
+
     def test_morph_via_cc27(self):
         self.write_morph_slots()
         self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 27, 'value': 64})

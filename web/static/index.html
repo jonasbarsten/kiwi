@@ -879,7 +879,10 @@ function apply(delta) {
       $('cpu').textContent = v === null ? 'cpu –' : `cpu ${v}%`;
     } else if (key === 'status:temp') {
       $('temp').textContent = v === null ? '–°C' : `${v}°C`;
-    } else if (key.startsWith('slot:') || key === 'morph:value') {
+    } else if (key === 'morph:value') {
+      slotState[key] = v;
+      renderMorph();              // every CC tick: only the slider, not the slot sheet
+    } else if (key.startsWith('slot:')) {
       slotState[key] = v;
       renderSlots();
     } else if (key === 'preset:current') {
@@ -950,6 +953,10 @@ async function post(path, body) {
   }
 }
 
+function renderMorph() {
+  if (dragging !== 'morph') $('morph').value = slotState['morph:value'];
+}
+
 function renderSlots() {
   const current = slotState['slot:current'];
   const names = slotState['slot:names'];
@@ -960,7 +967,7 @@ function renderSlots() {
   $('saved').textContent = slotState['slot:dirty'] ? 'unsaved changes (hold the button or tap Save)' : 'saved';
   const nextSlot = (current % total) + 1;
   $('morphto').textContent = `→ ${nextSlot}${names[nextSlot - 1] ? ' ' + names[nextSlot - 1] : ''}`;
-  if (dragging !== 'morph') $('morph').value = slotState['morph:value'];
+  renderMorph();
   const box = $('slots');
   box.replaceChildren();
   for (let n = 1; n <= total; n++) {
