@@ -25,7 +25,8 @@ Implementation plan: [`docs/superpowers/plans/2026-09-29-kiwi.md`](docs/superpow
 
 ## Controls
 
-Knobs are MIDI CCs on MIDI channel 1. They are defined in `host/kiwi.patch`.
+Knobs are MIDI CCs. Out of the box they sit on MIDI channel 1 as below; any control, Pianoteq
+parameter or action can be mapped to any CC from the web UI (see *CC mapping* under Web UI).
 
 | CC | Control |
 |---|---|
@@ -56,7 +57,7 @@ Pianoteq 8 must already be installed and activated in `~/.vst/Pianoteq 8.lv2`.
 ## How the patch works
 
 `host/kiwi.patch` is the single place that defines the instrument: which plugins load,
-their settings, every audio/MIDI connection, and the knob (CC) mapping. It is plain
+their settings, every audio/MIDI connection, and the baseline Pianoteq preset. It is plain
 [mod-host](https://github.com/moddevices/mod-host) commands, sent line by line by
 `host/kiwi-load` when `kiwi-patch.service` starts. `@MIDI_IN@` stands for the JACK port
 of the kernel `Midi Through` device, where all MIDI sources are merged.
@@ -72,9 +73,9 @@ of the kernel `Midi Through` device, where all MIDI sources are merged.
 | 6 | Zita Rev1 (default; switchable, see Web UI) | shared reverb, fully wet |
 | 7 | x42 dpl | limiter at −1 dBFS on the dry bus (the reverb return bypasses it, see below) |
 
-To change the MIDI channel of the knobs, edit the third number of the `midi_map` lines
-(0 = channel 1). To change the sampler's root key or the envelope ranges, edit
-`sampler/kiwi.sfz` (the envelope itself is set from the web UI).
+To change the sampler's root key or the envelope ranges, edit `sampler/kiwi.sfz` (the
+envelope itself is set from the web UI). Knob CCs are not in the patch: they live in
+`~/.local/state/kiwi/ccmap.json` and are applied by `kiwi-restore` at boot.
 
 Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
 `install.sh` caps polyphony at 24 voices and uses two engine threads (`multicore=2`). The
@@ -113,8 +114,23 @@ a full-screen app.
 
 - **Mix**: volume and reverb per mode, and the vocoder carrier blend, with their CC numbers.
   Moving a physical knob moves the slider.
-- **MIDI in**: a kiwi slice whose seeds light up per pitch class, the last event, and bars for
-  CC 20–26. Header: audio host status, JACK DSP load, CPU temperature, MIDI activity.
+- **MIDI in**: a kiwi slice whose seeds light up per pitch class, the last event, and a bar
+  per mapped CC. Header: audio host status, JACK DSP load, CPU temperature, MIDI activity,
+  **Map** and **Panic**.
+- **Panic**: sends All Sound Off and All Notes Off on all 16 channels into Midi Through, so
+  every instrument hears it. Mappable to a controller button.
+- **CC mapping**: **Map** enters map mode: controls stop moving and become targets; tap one
+  (or ◀ ▶ Save, the morph slider or Panic), then move the knob or press the button on your
+  controller — the next control change, on any channel, binds to it. Tap anywhere else, or
+  Map again, to finish. Mapped controls show `CC n` (and the channel if not 1); in map mode
+  a ✕ removes a mapping. One control has one CC; one CC may drive any number of controls.
+  Mix, carrier, synth, limiter and reverb controls are mapped inside mod-host (audio-thread,
+  no added latency; the reverb's are re-applied when the reverb is swapped). Pianoteq
+  parameters and the sampler envelope have no mod-host ports, so the service forwards those
+  CCs itself (the same path as the page's sliders) and keeps its mod-host link open while such
+  mappings exist. The map is global, not part of a slot: `~/.local/state/kiwi/ccmap.json`,
+  written only when a mapping changes; with no file the defaults are CC 20–26 for the knobs
+  and CC 27 for morph.
 - **Reverb**: a picker swaps the shared reverb live (Zita Rev1, Calf Reverb, MDA Ambience,
   Guitarix Reverb, Dragonfly Plate: `web/kiwi_web/reverbs.py`). The tail cuts for a moment;
   the dry sound is untouched. Each reverb keeps its own settings; the choice is part of the
@@ -143,10 +159,9 @@ a full-screen app.
   28-byte header (`web/kiwi_web/pianoteq_state.py`; the header's two constant words were
   learned from a state the plugin saved, so a future Pianoteq may need them re-learned).
   The rewritten bundles have ASCII, space-free paths, which is also what mod-host's
-  `bundle_add` needs. A `preset_load 0 <uri>` line in `kiwi.patch` would make that preset the
-  baseline; without one, a slot without a preset leaves the piano as it is.
-- **Presets**: see the next section. A dot marks values that differ from `host/kiwi.patch`;
-  **Reset to patch** puts them back live (RAM only; the saved preset is untouched).
+  `bundle_add` needs. `kiwi.patch` loads *Ant. Petrof Warm* as the baseline: that is what a
+  slot without a preset means.
+- **Presets**: see the next section. A dot marks values that differ from `host/kiwi.patch`.
 - Only private-network addresses are served, and changes are only accepted from the page
   itself (or from the Pi itself, for the button). No login.
 
@@ -154,7 +169,7 @@ It is built not to disturb audio: `kiwi-web.service` runs at idle CPU and I/O pr
 64 MB memory cap, connects to mod-host only while a page is open or a change is pending
 (and only after `kiwi-patch` and `kiwi-restore` finished), and disconnects 10 s after the
 last need. A hidden browser tab disconnects by itself. Its MIDI monitor (`aseqdump`, idle
-priority) runs permanently so the morph CC and the button work with no page open.
+priority) runs permanently so mapped CCs and the button work with no page open.
 The parameter list (`web/params.json`) is generated by `install.sh` from the installed plugins.
 
 ## Presets
@@ -180,7 +195,7 @@ write outside saving; slots are `~/.local/state/kiwi/presets/<n>.json`. Selectin
 discards unsaved RAM edits and resets anything the previous slot had changed, so sounds do not
 bleed between slots. A `kiwi-host` restart or reboot reloads the slot (`kiwi-restore`).
 
-**Morph**: CC 27 (or the page's morph slider) crossfades between the current slot (0) and the
+**Morph**: CC 27 by default (remappable; or the page's morph slider) crossfades between the current slot (0) and the
 next one (127) for continuous parameters: volumes, sends, blend, limiter, vocoder quality,
 sampler ports and envelope, the synth's float parameters, and the current reverb's settings
 when both slots use that reverb. Toggles, enums, integers, the reverb choice and Pianoteq are

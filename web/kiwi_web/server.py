@@ -5,7 +5,8 @@ writes are an explicit save and the one-line `current` file on slot selection.
 The mod-host connection is held only while a page is open or a change is
 pending, and only after kiwi-patch and kiwi-restore have finished, so it never
 competes with them for mod-host's single client slot. The MIDI monitor runs
-permanently so the morph CC works without a page.
+permanently so CC mappings handled here (Pianoteq, the sampler envelope, the
+actions) and the button work without a page.
 """
 import argparse
 import gzip
@@ -19,7 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import presets, reverbs, security
+from . import ccmap, presets, reverbs, security
 from .applier import Applier
 from .led import Led
 from .midi import MidiMonitor, describe
@@ -33,7 +34,7 @@ STREAM_INTERVAL = 0.1
 KEEPALIVE = 15.0
 IDLE_DISCONNECT = 10.0
 MAX_BODY = 16384
-MORPH_CC = 27
+PANIC_CCS = (120, 123)    # all sound off, all notes off
 SAVE_FLASHES = 8          # a rapid burst on save ...
 SAVE_FLASH_INTERVAL = 0.1
 SLOT_FLASH_INTERVAL = 0.3  # ... and the slot number, countable but brisk, on a selection
@@ -118,6 +119,43 @@ def send_cc(midi, param, value):
     return midi.cc(0, param['cc'], to_7bit(value, param['min'], param['max']))
 
 
+def port_ranges(meta):
+    """{(instance, symbol): (min, max)} for every port, every reverb's included."""
+    ranges = {(p['instance'], q['symbol']): (q['min'], q['max'])
+              for p in meta['plugins'] if p['kind'] == 'port' for q in p['params'] if 'cc' not in q}
+    for reverb in meta.get('reverbs', []):
+        for q in reverb['params']:
+            ranges[(reverbs.REVERB_INSTANCE, q['symbol'])] = (q['min'], q['max'])
+    return ranges
+
+
+def map_port(client, mapping, ranges):
+    """Binds a port to a CC inside mod-host (replacing any binding the port had).
+    Returns False if the port is unknown or mod-host refused."""
+    target = mapping['target']
+    bounds = ranges.get((target['instance'], target['symbol']))
+    if bounds is None:
+        return False
+    client.command(f"midi_unmap {target['instance']} {target['symbol']}")
+    code, _ = client.command(f"midi_map {target['instance']} {target['symbol']} {mapping['channel']} "
+                             f"{mapping['cc']} {bounds[0]:.6f} {bounds[1]:.6f}")
+    return code >= 0
+
+
+def unmap_port(client, target):
+    code, _ = client.command(f"midi_unmap {target['instance']} {target['symbol']}")
+    return code >= 0
+
+
+def panic(midi):
+    """All sound off and all notes off on every channel, through the virtual device."""
+    ok = True
+    for channel in range(16):
+        for number in PANIC_CCS:
+            ok = midi.cc(channel, number, 0) and ok
+    return ok
+
+
 def switch_reverb(client, reverb_id, settings):
     """Puts a reverb into the slot through `client`. Returns the number of failed commands."""
     entry = reverbs.find(reverb_id)
@@ -172,7 +210,7 @@ class HostLink:
     """Owns the single mod-host connection, only while a page or a change needs it."""
 
     def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None, led=None,
-                 bundles=None, favourites=None):
+                 bundles=None, favourites=None, mappings=None):
         self.model = model
         self.client = client
         self.store = store
@@ -182,17 +220,18 @@ class HostLink:
         self.led = led or Led()
         self.bundles = bundles or {}             # preset URI -> bundle URI
         self.favourites = favourites             # presets.Favourites or None
+        self.mappings = mappings                 # ccmap.CcMap or None
         self.applier = Applier(meta)
         self.cc_params = cc_controls(meta)
         self.port_params = [(p['instance'], q['symbol'])
                             for p in meta['plugins'] if p['kind'] == 'port' for q in p['params'] if 'cc' not in q]
-        self.mapped = [(m['instance'], m['symbol']) for m in meta['cc_map']]
+        self.ranges = port_ranges(meta)
         self.current_reverb = self.applier.effective_reverb(store.data)
         self._lock = threading.Lock()
         self._sets = {}
         self._reads = set()
+        self._maps = []                          # ('map', mapping) / ('unmap', target), in order
         self._reverb = None
-        self._reset = False
         self._select = None
         self._step = 0
         self._save = False
@@ -250,8 +289,25 @@ class HostLink:
     def request_reverb(self, reverb_id):
         self._request('_reverb', reverb_id)
 
-    def request_reset(self):
-        self._request('_reset', True)
+    def request_map(self, channel, cc, target):
+        """Binds `target` to a CC: the map file changes now, mod-host (for a port)
+        when the link gets to it."""
+        with self._lock:
+            self.mappings.set(channel, cc, target)
+            if target['kind'] == 'port':
+                self._maps.append(('map', {'channel': channel, 'cc': cc, 'target': target}))
+            self._last_need = self.clock()
+        self.model.update('map:mappings', list(self.mappings.mappings))
+        self._wake.set()
+
+    def request_unmap(self, target):
+        with self._lock:
+            removed = self.mappings.remove(target)
+            if removed is not None and target['kind'] == 'port':
+                self._maps.append(('unmap', target))
+            self._last_need = self.clock()
+        self.model.update('map:mappings', list(self.mappings.mappings))
+        self._wake.set()
 
     def request_select(self, slot):
         self._request('_select', slot)
@@ -288,9 +344,12 @@ class HostLink:
 
     def _needed(self):
         with self._lock:
-            if (self._viewers > 0 or self._sets or self._reads or self._reset or self._reverb is not None
+            if (self._viewers > 0 or self._sets or self._reads or self._maps or self._reverb is not None
                     or self._select is not None or self._step or self._save or self._morph is not None
                     or self._preset is not None):
+                return True
+            # A CC the service forwards itself must not wait for a reconnect.
+            if self.mappings is not None and self.mappings.forwarding():
                 return True
             return self._last_need is not None and self.clock() - self._last_need < IDLE_DISCONNECT
 
@@ -315,10 +374,10 @@ class HostLink:
             try:
                 self._apply_reads()      # knob moves first, so a save or select sees them
                 self._apply_select()
-                self._apply_reset()
                 self._apply_reverb()
                 self._apply_preset()
                 self._apply_morph()
+                self._apply_maps()
                 self._apply_sets()
                 self._apply_reads()
                 now = self.clock()
@@ -328,7 +387,7 @@ class HostLink:
                     self.model.update('status:temp', read_temperature())
                     next_status = now + 1.0
                 if now >= next_resync:
-                    for instance, symbol in self.mapped:
+                    for instance, symbol in self._mapped_ports():
                         self._read(instance, symbol)
                     next_resync = now + 5.0
             except HostError:
@@ -373,8 +432,15 @@ class HostLink:
 
     # ----- model bookkeeping --------------------------------------------------------
 
+    def _mapped_ports(self):
+        """Ports a CC drives inside mod-host: their values change without us hearing."""
+        if self.mappings is None:
+            return []
+        return [(m['target']['instance'], m['target']['symbol']) for m in self.mappings.ports()]
+
     def _publish_state(self):
         store = self.store
+        self.model.update('map:mappings', list(self.mappings.mappings) if self.mappings else [])
         self.model.update('slot:current', store.slot)
         self.model.update('slot:name', store.data['name'])
         self.model.update('slot:names', store.names())
@@ -420,6 +486,14 @@ class HostLink:
             self.current_reverb = op[1]
             self.model.update('reverb:current', op[1])
             self._read_reverb()
+            # The slot holds a new instance: its CC bindings went with the old one.
+            # Only this reverb's own parameters can be bound again.
+            if self.mappings is not None:
+                symbols = self.applier.reverb.get(op[1], {})
+                for mapping in self.mappings.ports():
+                    target = mapping['target']
+                    if target['instance'] == reverbs.REVERB_INSTANCE and target['symbol'] in symbols:
+                        map_port(self.client, mapping, self.ranges)
         elif kind == 'port':
             self.model.update(f'port:{op[1]}:{op[2]}', op[3])
         elif kind == 'patch':
@@ -473,20 +547,13 @@ class HostLink:
         self._publish_state()
         self.led.blink(SAVE_FLASHES, SAVE_FLASH_INTERVAL)
 
-    def _apply_reset(self):
+    def _apply_maps(self):
         with self._lock:
-            reset, self._reset = self._reset, False
-        if not reset:
-            return
-        with self._lock:
-            self._sets.clear()
-            self._reverb = None
-            self._morph = None
-        self._execute(self.applier.ops(self.store.data, StateStore.empty(), replace=True))
-        self.store.clear()
-        self.current_reverb = self.applier.default_reverb
-        self.model.update('morph:value', 0.0)
-        self._publish_state()
+            maps, self._maps = self._maps, []
+        for action, item in maps:
+            ok = map_port(self.client, item, self.ranges) if action == 'map' else unmap_port(self.client, item)
+            if not ok:
+                print(f'kiwi-web: mod-host refused {action} {item}', flush=True)
 
     def _apply_reverb(self):
         with self._lock:
@@ -583,9 +650,7 @@ def load_metadata(params_path, patch):
                 param['baseline'] = patch.baseline.get((reverbs.REVERB_INSTANCE, param['symbol']), param['default'])
             else:
                 param['baseline'] = param['default']
-    meta['cc_map'] = [vars(m) for m in patch.cc_map]
     meta['slots'] = StateStore.SLOTS
-    meta['morph_cc'] = MORPH_CC
     meta['default_preset'] = patch.presets.get(presets.PIANOTEQ_INSTANCE)
     return meta
 
@@ -619,12 +684,16 @@ class App:
         self.bundles = {p['uri']: p['bundle'] for p in self.presets}
         self.favourites = presets.Favourites(os.path.join(args.state_dir, 'favourites.json'))
         self.favourites.load()
+        self.known_targets = ccmap.known_targets(self.meta)
+        self.mappings = ccmap.CcMap(os.path.join(args.state_dir, 'ccmap.json'), self.known_targets)
+        self.mappings.load()
+        self.learning = None                     # the target waiting for its CC, in map mode
         self.client = HostClient(('127.0.0.1', args.host_port))
         self.link = HostLink(self.model, self.client, self.meta, self.store,
                              units_ready or systemd_units_ready,
                              midi=RawMidi(args.midi_device or find_device()), led=Led(args.led),
-                             bundles=self.bundles, favourites=self.favourites)
-        self.cc_targets = {(m.channel, m.cc): (m.instance, m.symbol) for m in patch.cc_map}
+                             bundles=self.bundles, favourites=self.favourites, mappings=self.mappings)
+        self.model.update('map:learning', None)
         self.active_notes = set()
         self._streams = 0
         self._streams_lock = threading.Lock()
@@ -651,13 +720,60 @@ class App:
             self.active_notes.discard(event['note'])
         elif kind == 'cc':
             self.model.update(f"midi:cc:{event['controller']}", event['value'])
-            if event['channel'] == 0 and event['controller'] == MORPH_CC:
-                self.link.request_morph(event['value'] / 127)
-            target = self.cc_targets.get((event['channel'], event['controller']))
-            if target is not None:
-                self.link.request_read(*target)
+            learning, self.learning = self.learning, None
+            if learning is not None:
+                self.link.request_map(event['channel'], event['controller'], learning)
+                self.model.update('map:learning', None)
+            else:
+                for target in self.mappings.targets(event['channel'], event['controller']):
+                    self._drive(target, event['value'])
         self.model.update('midi:notes', sorted(self.active_notes))
         self.model.update('midi:last', describe(event))
+
+    def _drive(self, target, value):
+        """One mapped CC arrived: ports changed inside mod-host already (RAM re-reads
+        them); the rest is this service's job."""
+        kind = target['kind']
+        if kind == 'port':
+            self.link.request_read(target['instance'], target['symbol'])
+        elif kind in ('patch', 'cc'):
+            name = target['uri'] if kind == 'patch' else str(target['number'])
+            low, high = self.ranges[(kind, target['instance'], name)]
+            self.link.set_value(kind, target['instance'], name, low + (high - low) * value / 127)
+        elif target['name'] == 'morph':
+            self.link.request_morph(value / 127)
+        elif value >= 64:
+            if target['name'] == 'panic':
+                self.panic()
+            elif target['name'] == 'slot_next':
+                self.link.request_step(+1)
+            elif target['name'] == 'slot_prev':
+                self.link.request_step(-1)
+            elif target['name'] == 'slot_save':
+                self.link.request_save()
+
+    def panic(self):
+        return self.link.midi is not None and panic(self.link.midi)
+
+    def learn(self, target):
+        """Map mode: the next CC binds to `target`. False if it is not a known target."""
+        target = ccmap.normalise(target, self.known_targets)
+        if target is None:
+            return False
+        self.learning = target
+        self.model.update('map:learning', target)
+        return True
+
+    def cancel_learning(self):
+        self.learning = None
+        self.model.update('map:learning', None)
+
+    def unmap(self, target):
+        target = ccmap.normalise(target, self.known_targets)
+        if target is None:
+            return False
+        self.link.request_unmap(target)
+        return True
 
     def apply_changes(self, changes):
         if not isinstance(changes, list):
@@ -790,9 +906,24 @@ class Handler(BaseHTTPRequestHandler):
         store = self.app.store
         if path == '/set':
             self._send(204 if self.app.apply_changes(body.get('changes')) else 400)
-        elif path == '/reset':
-            link.request_reset()
+        elif path == '/panic':
+            if self.app.panic():
+                self._send(204)
+            else:
+                self._send(503, b'no MIDI device\n')
+        elif path == '/map/learn':
+            if self.app.learn(body.get('target')):
+                self._send(204)
+            else:
+                self._send(409, b'unknown target\n')
+        elif path == '/map/cancel':
+            self.app.cancel_learning()
             self._send(204)
+        elif path == '/map/remove':
+            if self.app.unmap(body.get('target')):
+                self._send(204)
+            else:
+                self._send(409, b'unknown target\n')
         elif path == '/reverb':
             if body.get('id') in self.app.reverb_ranges:
                 link.request_reverb(body['id'])
@@ -905,7 +1036,10 @@ def restore(args):
         return 0
     applier = Applier(meta)
     ops = applier.ops(StateStore.empty(), store.data, replace=False)
-    if not ops:
+    mappings = ccmap.CcMap(os.path.join(args.state_dir, 'ccmap.json'), ccmap.known_targets(meta))
+    mappings.load()
+    ports = mappings.ports()
+    if not ops and not ports:
         print(f'kiwi-web: slot {store.slot}: nothing to restore', flush=True)
         return 0
     client = HostClient(('127.0.0.1', args.host_port))
@@ -922,16 +1056,20 @@ def restore(args):
     midi = RawMidi(args.midi_device or find_device())
     bundles = {p['uri']: p['bundle'] for p in load_presets(args.presets)}
     failures = 0
+    ranges = port_ranges(meta)
     try:
         failures = execute_ops(client, midi, cc_controls(meta), ops, bundles=bundles)
+        for mapping in ports:
+            failures += not map_port(client, mapping, ranges)
     except HostError as error:
         # Logged, not fatal: a failed unit would keep kiwi-web waiting.
         print(f'kiwi-web: restore stopped: {error}', flush=True)
-        failures = len(ops)
+        failures = len(ops) + len(ports)
     finally:
         client.close()
         midi.close()
-    print(f'kiwi-web: slot {store.slot}: {len(ops)} operation(s), {failures} failure(s)', flush=True)
+    print(f'kiwi-web: slot {store.slot}: {len(ops)} operation(s), {len(ports)} CC mapping(s), '
+          f'{failures} failure(s)', flush=True)
     return 0
 
 

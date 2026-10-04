@@ -22,7 +22,6 @@ add https://www.modartt.com/lv2/Pianoteq8 0
 add {ZITA} 6
 param_set 5 piano_vol 0.8
 param_set 6 MID_RT60 3
-midi_map 5 piano_vol 0 20 0 1
 """
 PARAMS = {'plugins': [
     {'instance': 5, 'title': 'Mix', 'kind': 'port', 'params': [
@@ -42,6 +41,9 @@ PARAMS = {'plugins': [
         {'symbol': 'decay_time', 'name': 'Decay', 'min': 0.4, 'max': 15, 'default': 1.5, 'type': 'float'}]},
 ], 'default_reverb': 'zita'}
 SLEEPER = [sys.executable, '-c', 'import time; time.sleep(60)']
+PIANO_VOL = {'kind': 'port', 'instance': 5, 'symbol': 'piano_vol'}
+PTQ_VOLUME = {'kind': 'patch', 'instance': 0, 'uri': 'https://www.modartt.com/lv2/Pianoteq8:Volume'}
+RELEASE = {'kind': 'cc', 'instance': 1, 'number': 105}
 PRESET_A = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'
 PRESET_B = 'file:///x/Pianoteq%208-factory-presets-Steinway%20D.lv2/HB_Steinway_D_Blues.ttl'
 PRESETS = {'presets': [
@@ -172,12 +174,10 @@ class ServerTest(unittest.TestCase):
         meta = json.loads(body)
         self.assertEqual(meta['plugins'][0]['params'][0]['baseline'], 0.8)
         self.assertEqual(meta['plugins'][3]['params'][0]['baseline'], 0.72)
-        self.assertEqual(meta['cc_map'][0]['cc'], 20)
         self.assertEqual(meta['default_reverb'], 'zita')
         self.assertEqual(meta['reverbs'][0]['params'][0]['baseline'], 3.0)
         self.assertEqual(meta['reverbs'][1]['params'][0]['baseline'], 1.5)
         self.assertEqual(meta['slots'], 8)
-        self.assertEqual(meta['morph_cc'], 27)
 
     def test_events_snapshot_then_set_is_ram_only(self):
         conn, response = self.open_events()
@@ -303,23 +303,96 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.post('/reverb', {'id': 'nope'}), 400)
         self.assertNotIn('remove 6', self.host.log)
 
-    # --- reset ---------------------------------------------------------------
+    # --- CC mapping ------------------------------------------------------------
 
-    def test_reset_restores_baselines_in_ram(self):
+    def ccmap_file(self):
+        return os.path.join(self.state_dir, 'ccmap.json')
+
+    def test_learn_binds_the_next_cc_and_maps_the_port_in_modhost(self):
+        conn, response = self.open_events()
+        mappings = self.read_until(response, 'map:mappings')['map:mappings']
+        self.assertIn({'channel': 0, 'cc': 20, 'target': PIANO_VOL}, mappings, 'the default knob map')
+        self.assertEqual(self.post('/map/learn', {'target': {'kind': 'port', 'instance': 9, 'symbol': 'x'}}), 409)
+        self.assertEqual(self.post('/map/learn', {'target': PIANO_VOL}), 204)
+        self.assertEqual(self.read_until(response, 'map:learning', PIANO_VOL)['map:learning'], PIANO_VOL)
+        self.app.on_midi({'type': 'cc', 'channel': 1, 'controller': 74, 'value': 10})
+        self.assertTrue(wait_for(lambda: self.host.midi_maps.get((5, 'piano_vol')) == (1, 74, 0.0, 1.0)))
+        self.assertIn('midi_unmap 5 piano_vol', self.host.log)
+        self.assertTrue(wait_for(lambda: self.app.model.get('map:learning') is None))
+        mappings = self.app.model.get('map:mappings')
+        self.assertIn({'channel': 1, 'cc': 74, 'target': PIANO_VOL}, mappings)
+        self.assertNotIn({'channel': 0, 'cc': 20, 'target': PIANO_VOL}, mappings, 'one CC per target')
+        self.assertEqual(listing(self.state_dir), [self.ccmap_file()], 'the map is the one write')
+        self.assertFalse(self.app.store.dirty, 'mapping is not a slot edit')
+        conn.close()
+
+    def test_cancel_learning(self):
+        self.assertEqual(self.post('/map/learn', {'target': PIANO_VOL}), 204)
+        self.assertEqual(self.post('/map/cancel'), 204)
+        self.app.on_midi({'type': 'cc', 'channel': 1, 'controller': 74, 'value': 10})
+        time.sleep(0.2)
+        self.assertNotIn((5, 'piano_vol'), self.host.midi_maps)
+        self.assertEqual(listing(self.state_dir), [])
+
+    def test_one_cc_drives_many_targets_and_forwarded_ones_keep_the_link(self):
+        self.post('/map/learn', {'target': PIANO_VOL})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 0})
+        self.post('/map/learn', {'target': PTQ_VOLUME})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 0})
+        self.post('/map/learn', {'target': RELEASE})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 0})
+        self.assertTrue(wait_for(lambda: len(self.app.mappings.targets(0, 74)) == 3))
+        self.host.params[(5, 'piano_vol')] = 0.5          # mod-host moved the port itself
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.host.patch.get((0, PTQ_VOLUME['uri'])) == 1.0), 'forwarded patch_set')
+        self.assertTrue(wait_for(lambda: self.app.store.data['params'].get('5:piano_vol') == 0.5), 'port re-read')
+        with open(self.midi_path, 'rb') as f:
+            self.assertEqual(f.read()[-3:], b'\xb0\x69\x7f', 'forwarded sampler CC')
+        self.assertTrue(self.app.store.dirty)
+        self.assertTrue(self.app.link._needed(), 'forwarding keeps the link up with no page open')
+
+    def test_remove_mapping(self):
+        self.assertEqual(self.post('/map/remove', {'target': PIANO_VOL}), 204)
+        self.assertTrue(wait_for(lambda: 'midi_unmap 5 piano_vol' in self.host.log))
+        self.assertEqual(self.app.mappings.targets(0, 20), [])
+        self.assertEqual(self.post('/map/remove', {'target': {'kind': 'action', 'name': 'nope'}}), 409)
+
+    def test_panic_endpoint_and_action(self):
+        self.assertEqual(self.post('/panic'), 204)
+        with open(self.midi_path, 'rb') as f:
+            data = f.read()
+        self.assertEqual(len(data), 16 * 2 * 3)
+        self.assertEqual(data[:6], b'\xb0\x78\x00\xb0\x7b\x00')
+        self.assertEqual(data[-6:], b'\xbf\x78\x00\xbf\x7b\x00')
+        self.post('/map/learn', {'target': {'kind': 'action', 'name': 'panic'}})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 80, 'value': 0})
+        self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 80)))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 80, 'value': 0})     # release: nothing
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 80, 'value': 127})
+        with open(self.midi_path, 'rb') as f:
+            self.assertEqual(len(f.read()), 2 * 16 * 2 * 3)
+
+    def test_slot_actions_via_cc(self):
+        self.post('/map/learn', {'target': {'kind': 'action', 'name': 'slot_next'}})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 81)))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.app.store.slot == 2))
+        self.post('/map/learn', {'target': {'kind': 'action', 'name': 'slot_save'}})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 82, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 82)))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 82, 'value': 100})
+        self.assertTrue(wait_for(lambda: os.path.exists(self.slot_file(2))))
+
+    def test_reverb_switch_keeps_its_mappings(self):
+        self.post('/map/learn', {'target': {'kind': 'port', 'instance': 6, 'symbol': 'MID_RT60'}})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 90, 'value': 0})
+        self.assertTrue(wait_for(lambda: (6, 'MID_RT60') in self.host.midi_maps))
         self.post('/reverb', {'id': 'calf'})
         self.assertTrue(wait_for(lambda: self.host.instances.get(6) == CALF))
-        self.post('/set', {'changes': [{'instance': 5, 'symbol': 'piano_vol', 'value': 0.3},
-                                       {'instance': 1, 'cc': 105, 'value': 3.0}]})
-        self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - 0.3) < 1e-6))
-        self.assertEqual(self.post('/reset'), 204)
-        self.assertTrue(wait_for(lambda: self.host.instances.get(6) == ZITA))
-        self.assertTrue(wait_for(lambda: abs(self.host.params[(5, 'piano_vol')] - 0.8) < 1e-6))
-        self.assertTrue(wait_for(lambda: self.host.params.get((6, 'MID_RT60')) == 3.0))
-        with open(self.midi_path, 'rb') as f:
-            self.assertTrue(f.read().endswith(b'\xb0\x69\x03'))    # release back to 0.1 of 0..4
-        self.assertEqual(self.app.store.data['params'], {})
-        self.assertTrue(self.app.store.dirty)
-        self.assertEqual(listing(self.state_dir), [])
+        self.assertNotIn((6, 'MID_RT60'), self.host.midi_maps, 'the instance was recreated')
+        self.post('/reverb', {'id': 'zita'})
+        self.assertTrue(wait_for(lambda: self.host.midi_maps.get((6, 'MID_RT60')) == (0, 90, 1.0, 8.0)))
 
     # --- slots ---------------------------------------------------------------
 
@@ -414,7 +487,7 @@ class ServerTest(unittest.TestCase):
 
     def test_loopback_exemption_covers_only_slot_endpoints(self):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
-        conn.request('POST', '/reset', body='{}', headers={'Content-Type': 'application/json',
+        conn.request('POST', '/panic', body='{}', headers={'Content-Type': 'application/json',
                                                            'Origin': 'http://evil.example'})
         response = conn.getresponse()
         response.read()
@@ -579,10 +652,25 @@ class RestoreTest(unittest.TestCase):
             self.assertEqual(host.preset, PRESET_A)
             host.close()
 
+    def test_restore_applies_cc_mappings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_fixture(tmp)
+            host = FakeHost({(5, 'piano_vol'): 0.8, (3, 'blend'): 0.0})
+            args = parse_args(['--state-dir', os.path.join(tmp, 'state'), '--host-port', str(host.port),
+                               '--patch', paths['kiwi.patch'], '--params', paths['params.json']])
+            self.assertEqual(restore(args), 0)
+            # No map file: the defaults, minus the ports this fixture does not have.
+            self.assertEqual(host.midi_maps, {(5, 'piano_vol'): (0, 20, 0.0, 1.0), (3, 'blend'): (0, 26, 0.0, 2.0)})
+            host.close()
+
     def test_nothing_to_restore_needs_no_host(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = write_fixture(tmp)
-            args = parse_args(['--state-dir', os.path.join(tmp, 'state'), '--host-port', '1',
+            state_dir = os.path.join(tmp, 'state')
+            os.makedirs(state_dir)
+            with open(os.path.join(state_dir, 'ccmap.json'), 'w') as f:
+                json.dump({'mappings': []}, f)
+            args = parse_args(['--state-dir', state_dir, '--host-port', '1',
                                '--patch', paths['kiwi.patch'], '--params', paths['params.json']])
             self.assertEqual(restore(args), 0)
 
@@ -624,7 +712,7 @@ class LinkTest(unittest.TestCase):
     def make_link(self, ready, store_class=StateStore):
         meta = {'plugins': [{'instance': 5, 'title': 'Mix', 'kind': 'port', 'params': [
             {'symbol': 'piano_vol', 'name': 'v', 'min': 0, 'max': 1, 'default': 0.8, 'baseline': 0.8,
-             'type': 'float'}]}], 'cc_map': [], 'reverbs': [], 'default_reverb': None}
+             'type': 'float'}]}], 'reverbs': [], 'default_reverb': None}
         self.dir = tempfile.TemporaryDirectory()
         self.host = FakeHost({(5, 'piano_vol'): 0.8})
         self.clock = [0.0]

@@ -37,6 +37,22 @@ header {
 .dot.offline { background: var(--bad); }
 .dot.starting, .dot.idle { background: var(--warn); }
 .dot.pulse { background: var(--flesh-hi); box-shadow: 0 0 0 3px rgba(197,225,122,.35); }
+header button { min-height: 38px; padding: 0 12px; font-size: 15px; }
+#panic { border-color: var(--bad); }
+/* Map mode: controls stop moving and become targets; the chosen one waits for a CC. */
+body.mapping main { cursor: pointer; }
+body.mapping .row { position: relative; border-radius: 10px; outline: 1px dashed var(--fuzz); outline-offset: -1px; margin-top: 4px; }
+body.mapping .row > input, body.mapping .row > .seg, body.mapping .row > select { pointer-events: none; opacity: .55; }
+body.mapping .mappable { outline: 1px dashed var(--fuzz); outline-offset: 2px; }
+body.mapping .morph input { pointer-events: none; opacity: .55; }
+.row.learning, body.mapping .mappable.learning { outline: 3px solid var(--warn); animation: breathe 1s ease-in-out infinite alternate; }
+@keyframes breathe { from { outline-color: var(--warn); } to { outline-color: var(--flesh-hi); } }
+.row label small.map { color: var(--flesh-hi); }
+.row .unmap { display: none; grid-area: value; justify-self: end; min-height: 36px; min-width: 36px; padding: 0 10px; font-size: 14px; }
+body.mapping .row.mapped .unmap { display: inline-block; }
+body.mapping .row.mapped output { display: none; }
+#maphint { display: none; font-size: 14px; color: var(--seed); background: var(--warn); padding: 8px 16px; text-align: center; }
+body.mapping #maphint { display: block; }
 main {
   display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1200px; margin: 0 auto;
   padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
@@ -178,7 +194,10 @@ footer {
   <span class="stat" id="cpu">cpu –</span>
   <span class="stat" id="temp">–°C</span>
   <span class="dot" id="mididot" title="MIDI in"></span>
+  <button type="button" id="map" aria-pressed="false">Map</button>
+  <button type="button" id="panic" class="mappable">Panic</button>
 </header>
+<div id="maphint">Map mode: tap a control, then move the knob or press the button on your controller. Tap anywhere else to finish.</div>
 <main id="main">
   <section class="card wide" style="padding: 0">
     <div class="presets">
@@ -187,14 +206,14 @@ footer {
         <input id="slotname" type="text" maxlength="40" autocomplete="off" aria-label="preset name">
       </div>
       <div class="nav">
-        <button type="button" id="prev" aria-label="previous preset">◀</button>
-        <button type="button" id="next" aria-label="next preset">▶</button>
-        <button type="button" id="save">Save</button>
+        <button type="button" id="prev" class="mappable" aria-label="previous preset">◀</button>
+        <button type="button" id="next" class="mappable" aria-label="next preset">▶</button>
+        <button type="button" id="save" class="mappable">Save</button>
         <button type="button" id="slotsbtn" aria-label="all presets">☰</button>
       </div>
     </div>
-    <div class="morph">
-      <span class="target">morph</span>
+    <div class="morph mappable" id="morphrow">
+      <span class="target" id="morphlabel">morph</span>
       <input type="range" id="morph" min="0" max="1" step="0.001" value="0" aria-label="morph to next preset">
       <span class="target" id="morphto">→ 2</span>
     </div>
@@ -216,8 +235,6 @@ footer {
 </main>
 <footer>
   <span id="saved">no unsaved changes</span>
-  <span class="spacer"></span>
-  <button type="button" id="reset">Reset to patch</button>
 </footer>
 <script>
 'use strict';
@@ -251,9 +268,128 @@ function format(param, v) {
   return span <= 2 ? v.toFixed(2) : span <= 200 ? v.toFixed(1) : String(Math.round(v));
 }
 
-function ccFor(instance, symbol) {
-  return meta.cc_map.find((m) => m.instance === instance && m.symbol === symbol);
+// ----- CC mapping ------------------------------------------------------------------
+// Targets mirror the server's: {kind:'port',instance,symbol} | {kind:'patch',instance,uri}
+// | {kind:'cc',instance,number} | {kind:'action',name}.
+let mappings = [];          // from map:mappings
+let learning = null;        // from map:learning
+let mapMode = false;
+const actionTargets = { panic: 'panic', prev: 'slot_prev', next: 'slot_next', save: 'slot_save', morphrow: 'morph' };
+
+function targetOf(control) {
+  const { plugin, param } = control;
+  if (param.cc !== undefined) return { kind: 'cc', instance: plugin.instance, number: param.cc };
+  if (plugin.kind === 'port') return { kind: 'port', instance: plugin.instance, symbol: param.symbol };
+  return { kind: 'patch', instance: plugin.instance, uri: param.uri };
 }
+
+function sameTarget(a, b) {
+  return !!a && !!b && a.kind === b.kind && a.instance === b.instance && a.symbol === b.symbol
+    && a.uri === b.uri && a.number === b.number && a.name === b.name;
+}
+
+function mappingFor(target) {
+  return mappings.find((m) => sameTarget(m.target, target));
+}
+
+function ccLabel(mapping) {
+  return `CC ${mapping.cc}${mapping.channel ? ` ch${mapping.channel + 1}` : ''}`;
+}
+
+function setMapMode(on) {
+  mapMode = on;
+  document.body.classList.toggle('mapping', on);
+  $('map').classList.toggle('on', on);
+  $('map').setAttribute('aria-pressed', String(on));
+  if (!on && learning) post('/map/cancel');
+}
+
+function learn(target) {
+  post('/map/learn', { target });
+}
+
+// In map mode a tap on a row or an action learns it; a tap anywhere else ends map mode.
+document.addEventListener('click', (event) => {
+  if (!mapMode) return;
+  if (event.target.closest('#map')) return;
+  const unmap = event.target.closest('.unmap');
+  if (unmap) {
+    event.stopPropagation();
+    post('/map/remove', { target: JSON.parse(unmap.dataset.target) });
+    return;
+  }
+  const row = event.target.closest('.row');
+  if (row && row.dataset.key && controls.has(row.dataset.key)) {
+    event.preventDefault();
+    learn(targetOf(controls.get(row.dataset.key)));
+    return;
+  }
+  const action = event.target.closest('.mappable');
+  if (action && actionTargets[action.id]) {
+    event.preventDefault();
+    event.stopPropagation();
+    learn({ kind: 'action', name: actionTargets[action.id] });
+    return;
+  }
+  setMapMode(false);
+}, true);
+
+function renderMappings() {
+  for (const control of controls.values()) renderMapping(control);
+  for (const [id, name] of Object.entries(actionTargets)) {
+    const el = $(id);
+    if (!el) continue;
+    const target = { kind: 'action', name };
+    el.classList.toggle('learning', sameTarget(learning, target));
+    const mapping = mappingFor(target);
+    el.title = mapping ? ccLabel(mapping) : '';
+    if (id === 'morphrow') $('morphlabel').textContent = mapping ? `morph · ${ccLabel(mapping)}` : 'morph';
+  }
+  renderCcBars();
+}
+
+function renderMapping(control) {
+  const { row } = control;
+  const target = targetOf(control);
+  const mapping = mappingFor(target);
+  let small = row.querySelector('label small.map');
+  if (mapping && !small) {
+    small = document.createElement('small');
+    small.className = 'map';
+    row.querySelector('label').appendChild(small);
+  }
+  if (small) small.textContent = mapping ? ccLabel(mapping) : '';
+  if (!mapping && small) small.remove();
+  row.classList.toggle('mapped', !!mapping);
+  row.classList.toggle('learning', sameTarget(learning, target));
+  let unmap = row.querySelector('.unmap');
+  if (mapping && !unmap) {
+    unmap = document.createElement('button');
+    unmap.type = 'button';
+    unmap.className = 'unmap';
+    unmap.textContent = '✕ unmap';
+    unmap.setAttribute('aria-label', 'remove CC mapping');
+    row.appendChild(unmap);
+  }
+  if (unmap) unmap.dataset.target = JSON.stringify(target);
+  if (!mapping && unmap) unmap.remove();
+}
+
+// The "MIDI in" card shows a bar per mapped CC (channel-agnostic).
+function renderCcBars() {
+  const numbers = [...new Set(mappings.map((m) => m.cc))].sort((a, b) => a - b);
+  const box = $('ccs');
+  box.replaceChildren();
+  for (const cc of numbers) {
+    const cell = document.createElement('div');
+    cell.className = 'cc';
+    cell.innerHTML = `<i><b id="cc${cc}"></b></i>${cc}`;
+    box.appendChild(cell);
+  }
+}
+
+$('map').addEventListener('click', () => setMapMode(!mapMode));
+$('panic').addEventListener('click', () => { if (!mapMode) post('/panic'); });
 
 // Some plugins name a port by its symbol (EQ2_FREQ): show it as words instead.
 function prettyName(param) {
@@ -266,16 +402,9 @@ function makeControl(plugin, param, label) {
   const key = keyOf(plugin, param);
   const row = document.createElement('div');
   row.className = 'row';
+  row.dataset.key = key;
   const lab = document.createElement('label');
   lab.textContent = label || prettyName(param);
-  if (plugin.kind === 'port') {
-    const cc = ccFor(plugin.instance, param.symbol);
-    if (cc) {
-      const small = document.createElement('small');
-      small.textContent = `CC ${cc.cc}`;
-      lab.appendChild(small);
-    }
-  }
   let input;
   let output = null;
   const choices = param.type === 'toggle'
@@ -329,6 +458,7 @@ function makeControl(plugin, param, label) {
   const control = { key, row, input, output, param, plugin };
   controls.set(key, control);
   render(control);
+  renderMapping(control);
   return row;
 }
 
@@ -357,6 +487,9 @@ function setValue(key, v) {
   const control = controls.get(key);
   if (control) render(control);
 }
+
+// The renderers above run before `mappings` exists when the page builds: the map
+// state arrives with the first event and re-renders everything.
 
 // Changes are sent while dragging, at most every FAST_MS. Pianoteq and the reverb
 // recompute inside the audio thread on every change, so they get SLOW_MS.
@@ -475,13 +608,7 @@ function build() {
     labels.appendChild(span);
   }
   $('blend').appendChild(labels);
-
-  for (const m of meta.cc_map) {
-    const cell = document.createElement('div');
-    cell.className = 'cc';
-    cell.innerHTML = `<i><b id="cc${m.cc}"></b></i>${m.cc}`;
-    $('ccs').appendChild(cell);
-  }
+  renderMappings();
 
   if (meta.reverbs.length) section('Reverb', buildReverbSection);
 
@@ -604,6 +731,12 @@ function apply(delta) {
     } else if (key === 'preset:favourites') {
       presetState.favourites = v;
       renderPresetFamilies();
+    } else if (key === 'map:mappings') {
+      mappings = v;
+      renderMappings();
+    } else if (key === 'map:learning') {
+      learning = v;
+      renderMappings();
     } else if (key === 'midi:notes') {
       lightSeeds(v);
     } else if (key === 'midi:last') {
@@ -643,11 +776,6 @@ function disconnect() {
 }
 
 document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
-
-$('reset').addEventListener('click', async () => {
-  if (!confirm('Reset every value to the patch defaults? (RAM only: the saved preset is untouched.)')) return;
-  await post('/reset');
-});
 
 // ----- presets --------------------------------------------------------------
 
@@ -696,12 +824,13 @@ function renderSlots() {
 
 // ◀/▶ sit next to Save on a phone: unsaved edits get a confirm here too.
 function stepSlot(path) {
+  if (mapMode) return;
   if (slotState['slot:dirty'] && !confirm('Discard unsaved changes?')) return;
   post(path);
 }
 $('prev').addEventListener('click', () => stepSlot('/slot/prev'));
 $('next').addEventListener('click', () => stepSlot('/slot/next'));
-$('save').addEventListener('click', () => post('/slot/save'));
+$('save').addEventListener('click', () => { if (!mapMode) post('/slot/save'); });
 $('slotsbtn').addEventListener('click', () => { $('slots').hidden = !$('slots').hidden; });
 $('slotname').addEventListener('focus', () => { editingName = true; });
 $('slotname').addEventListener('blur', () => { editingName = false; renderSlots(); });

@@ -9,6 +9,7 @@ class FakeHost:
         self.patch = {}
         self.instances = {}
         self.bundles = []
+        self.midi_maps = {}         # (instance, symbol) -> (channel, cc, min, max)
         self.preset = None
         self.known_presets = None   # None: accept any preset URI; else a set
         self.connections = []
@@ -81,10 +82,20 @@ class FakeHost:
             instance = int(parts[1])
             self.instances.pop(instance, None)
             self.params = {k: v for k, v in self.params.items() if k[0] != instance}
+            self.midi_maps = {k: v for k, v in self.midi_maps.items() if k[0] != instance}
             self.connections = [c for c in self.connections if f'effect_{instance}:' not in c[0] + c[1]]
             return 'resp 0'
         if parts[0] == 'connect':
             self.connections.append((parts[1], parts[2]))
+            return 'resp 0'
+        if parts[0] == 'midi_map':
+            key = (int(parts[1]), parts[2])
+            if key not in self.params and key[0] not in self.instances:
+                return 'resp -103'
+            self.midi_maps[key] = (int(parts[3]), int(parts[4]), float(parts[5]), float(parts[6]))
+            return 'resp 0'
+        if parts[0] == 'midi_unmap':
+            self.midi_maps.pop((int(parts[1]), parts[2]), None)
             return 'resp 0'
         if parts[0] == 'bundle_add':
             self.bundles.append(parts[1])
