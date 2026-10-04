@@ -80,6 +80,22 @@ class StateStoreTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.slot_path(1) + '.tmp'))
         self.assertEqual(self.store.names()[0], 'Warm')
 
+    def test_migrate_presets_rewrites_only_slots_whose_uri_changes(self):
+        self.store.set_preset('file:///old/A.ttl')
+        self.store.save()
+        self.store.select(2)
+        self.store.set_preset('file:///new/b.ttl')
+        self.store.save()
+        self.store.select(3)
+        self.store.set_preset('file:///old/C.ttl')          # RAM only, current slot
+        replace = {'file:///old/A.ttl': 'file:///new/a.ttl', 'file:///old/C.ttl': 'file:///new/c.ttl'}
+        changed = self.store.migrate_presets(lambda uri: replace.get(uri, uri))
+        self.assertEqual(changed, [1, 3])
+        self.assertEqual(self.store.read_slot(1)['preset'], 'file:///new/a.ttl')
+        self.assertEqual(self.store.read_slot(2)['preset'], 'file:///new/b.ttl')
+        self.assertEqual(self.store.data['preset'], 'file:///new/c.ttl')
+        self.assertEqual(self.store.summaries()[0]['preset'], 'file:///new/a.ttl')
+
     def test_summaries_show_preset_and_reverb_per_slot(self):
         self.store.set_preset('file:///x/a.ttl')
         self.store.set_reverb('calf')

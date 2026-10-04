@@ -372,17 +372,80 @@ class ServerTest(unittest.TestCase):
         with open(self.midi_path, 'rb') as f:
             self.assertEqual(len(f.read()), 2 * 16 * 2 * 3)
 
-    def test_slot_actions_via_cc(self):
+    def test_slot_actions_via_cc_fire_on_the_press_only(self):
         self.post('/map/learn', {'target': {'kind': 'action', 'name': 'slot_next'}})
-        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 0})
         self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 81)))
         self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})
         self.assertTrue(wait_for(lambda: self.app.store.slot == 2))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})   # held / repeated: no step
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 100})
+        time.sleep(0.3)
+        self.assertEqual(self.app.store.slot, 2)
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 0})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 81, 'value': 127})
+        self.assertTrue(wait_for(lambda: self.app.store.slot == 3))
         self.post('/map/learn', {'target': {'kind': 'action', 'name': 'slot_save'}})
-        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 82, 'value': 127})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 82, 'value': 0})
         self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 82)))
         self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 82, 'value': 100})
-        self.assertTrue(wait_for(lambda: os.path.exists(self.slot_file(2))))
+        self.assertTrue(wait_for(lambda: os.path.exists(self.slot_file(3))))
+
+    def test_own_ccs_are_neither_learned_nor_forwarded(self):
+        # The sampler envelope CCs and panic go out through the virtual device and come
+        # back through Midi Through: they must not bind, and must not drive anything.
+        self.post('/map/learn', {'target': PIANO_VOL})
+        self.assertTrue(wait_for(lambda: self.app.learning is not None))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 105, 'value': 64})     # echo of our own
+        self.app.on_midi({'type': 'cc', 'channel': 3, 'controller': 120, 'value': 0})      # panic echo
+        time.sleep(0.2)
+        self.assertIsNotNone(self.app.learning, 'still waiting for a real CC')
+        self.app.on_midi({'type': 'cc', 'channel': 1, 'controller': 105, 'value': 64})     # another channel: real
+        self.assertTrue(wait_for(lambda: self.app.mappings.targets(1, 105) == [PIANO_VOL]))
+        # A target on our own CC can only be reached by a different channel, never looped.
+        self.post('/map/learn', {'target': RELEASE})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 0})
+        self.assertTrue(wait_for(lambda: self.app.mappings.targets(0, 74) == [RELEASE]))
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 127})
+        self.assertTrue(wait_for(lambda: os.path.exists(self.midi_path) and open(self.midi_path, 'rb').read().endswith(b'\xb0\x69\x7f')))
+        with open(self.midi_path, 'rb') as f:
+            sent = f.read()
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 105, 'value': 127})    # the echo of that send
+        time.sleep(0.3)
+        with open(self.midi_path, 'rb') as f:
+            self.assertEqual(f.read(), sent, 'the echo must not be forwarded again')
+
+    def test_learning_expires_and_ends_with_the_last_viewer(self):
+        self.post('/map/learn', {'target': PIANO_VOL})
+        self.assertTrue(wait_for(lambda: self.app.learning is not None))
+        self.app.clock = lambda: time.monotonic() + server_module.LEARN_TIMEOUT + 1
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 74, 'value': 10})
+        time.sleep(0.2)
+        self.assertEqual(self.app.mappings.targets(0, 74), [], 'an expired learn eats no knob move')
+        self.assertIsNone(self.app.model.get('map:learning'))
+        self.app.clock = time.monotonic
+        conn, response = self.open_events()
+        self.read_until(response, 'slot:current')
+        self.post('/map/learn', {'target': PIANO_VOL})
+        self.assertTrue(wait_for(lambda: self.app.learning is not None))
+        response.close()        # the response object holds the socket open until closed too
+        conn.close()
+        # The server notices a closed stream on a failed write: the first one after a
+        # close can still land in the kernel buffer, so nudge it a few times.
+        for i in range(20):
+            self.app.model.update('status:temp', float(i))
+            if wait_for(lambda: self.app.learning is None, timeout=0.3):
+                break
+        self.assertIsNone(self.app.learning, 'the page that asked is gone')
+
+    def test_mapped_reverb_knob_reaches_ram(self):
+        self.post('/map/learn', {'target': {'kind': 'port', 'instance': 6, 'symbol': 'MID_RT60'}})
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 90, 'value': 0})
+        self.assertTrue(wait_for(lambda: (6, 'MID_RT60') in self.host.midi_maps))
+        self.host.params[(6, 'MID_RT60')] = 7.0           # mod-host moved it
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 90, 'value': 100})
+        self.assertTrue(wait_for(lambda: self.app.store.data['reverb_params'].get('zita', {}).get('MID_RT60') == 7.0))
+        self.assertTrue(self.app.store.dirty)
 
     def test_reverb_switch_keeps_its_mappings(self):
         self.post('/map/learn', {'target': {'kind': 'port', 'instance': 6, 'symbol': 'MID_RT60'}})

@@ -51,7 +51,7 @@ body.mapping .morph input { pointer-events: none; opacity: .55; }
 .row .unmap { display: none; grid-area: value; justify-self: end; min-height: 36px; min-width: 36px; padding: 0 10px; font-size: 14px; }
 body.mapping .row.mapped .unmap { display: inline-block; }
 body.mapping .row.mapped output { display: none; }
-/* Map mode is loud: amber header and page tint, a banner with Done, pulsing Map button. */
+/* Map mode is loud: amber header and page tint, a banner, pulsing Map button. */
 header { flex-wrap: wrap; }
 #maphint { display: none; flex-basis: 100%; font-size: 15px; color: var(--seed); padding: 6px 0 2px; }
 body.mapping #maphint { display: block; }
@@ -361,8 +361,8 @@ function learn(target) {
 }
 
 // In map mode a tap on a row or an action learns it. Opening and closing sections,
-// the slot sheet and the preset browser still work; a tap on empty space (or Done /
-// Map) ends map mode.
+// the slot sheet and the preset browser still work; a tap on anything else only
+// ends map mode (it must not also do what it would do outside map mode).
 const NAVIGATION = '#map, summary, #slotsbtn, .pbrowser, .slots, .seg button[data-id]';
 document.addEventListener('click', (event) => {
   if (!mapMode) return;
@@ -386,6 +386,8 @@ document.addEventListener('click', (event) => {
     learn({ kind: 'action', name: actionTargets[action.id] });
     return;
   }
+  event.preventDefault();
+  event.stopPropagation();
   setMapMode(false);
 }, true);
 

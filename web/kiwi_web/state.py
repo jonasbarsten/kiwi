@@ -188,6 +188,25 @@ class StateStore:
         self.data['preset'] = uri
         self._touch()
 
+    def migrate_presets(self, replace):
+        """Rewrites, once, every slot whose preset URI `replace(uri)` maps to another
+        value (the preset export layout changed once). RAM follows for the current
+        slot without becoming dirty. Returns the slots that changed."""
+        changed = []
+        for n in range(1, self.slots + 1):
+            document = self.data if n == self.slot else self.read_slot(n)
+            uri = document.get('preset')
+            if uri is None:
+                continue
+            new = replace(uri)
+            if new == uri:
+                continue
+            document['preset'] = new
+            _write_atomic(self._slot_path(n), json.dumps(document, indent=1, sort_keys=True))
+            changed.append(n)
+        self._others = {}
+        return changed
+
     def set_reverb(self, reverb_id):
         self.data['reverb'] = reverb_id
         self._touch()

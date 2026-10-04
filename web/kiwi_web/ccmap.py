@@ -13,6 +13,7 @@ Targets:
 """
 import json
 import os
+import threading
 
 from . import reverbs
 
@@ -80,6 +81,7 @@ class CcMap:
         self.path = path
         self.known = known
         self.mappings = []
+        self._lock = threading.Lock()   # read by the MIDI thread, changed by HTTP threads
 
     def load(self):
         try:
@@ -101,41 +103,52 @@ class CcMap:
         return self.mappings
 
     def targets(self, channel, cc):
-        return [m['target'] for m in self.mappings if m['channel'] == channel and m['cc'] == cc]
+        with self._lock:
+            return [m['target'] for m in self.mappings if m['channel'] == channel and m['cc'] == cc]
 
     def mapping_for(self, target):
+        with self._lock:
+            return self._find(target)
+
+    def _find(self, target):
         key = target_key(target)
         return next((m for m in self.mappings if target_key(m['target']) == key), None)
 
     def set(self, channel, cc, target):
         """Binds `target` to the CC, replacing its previous binding. Returns that
-        previous mapping (or None)."""
-        previous = self.remove(target, write=False)
-        self.mappings.append({'channel': channel, 'cc': cc, 'target': target})
-        self._write()
+        previous mapping (or None). The file is written before the binding counts."""
+        with self._lock:
+            previous = self._find(target)
+            mappings = [m for m in self.mappings if m is not previous]
+            mappings.append({'channel': channel, 'cc': cc, 'target': target})
+            self._write(mappings)
+            self.mappings = mappings
         return previous
 
-    def remove(self, target, write=True):
-        previous = self.mapping_for(target)
-        if previous is not None:
-            self.mappings.remove(previous)
-            if write:
-                self._write()
+    def remove(self, target):
+        with self._lock:
+            previous = self._find(target)
+            if previous is not None:
+                mappings = [m for m in self.mappings if m is not previous]
+                self._write(mappings)
+                self.mappings = mappings
         return previous
 
     def ports(self):
         """The mappings mod-host applies itself."""
-        return [m for m in self.mappings if m['target']['kind'] == 'port']
+        with self._lock:
+            return [m for m in self.mappings if m['target']['kind'] == 'port']
 
     def forwarding(self):
         """True if the service itself has to turn CCs into parameter changes."""
-        return any(m['target']['kind'] in ('patch', 'cc') for m in self.mappings)
+        with self._lock:
+            return any(m['target']['kind'] in ('patch', 'cc') for m in self.mappings)
 
-    def _write(self):
+    def _write(self, mappings):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp = self.path + '.tmp'
         with open(tmp, 'w') as f:
-            json.dump({'mappings': self.mappings}, f, indent=1)
+            json.dump({'mappings': mappings}, f, indent=1)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.path)

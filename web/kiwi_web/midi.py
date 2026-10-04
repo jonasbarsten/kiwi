@@ -1,6 +1,7 @@
 """Incoming MIDI monitor: parses `aseqdump` output for the Midi Through port.
 
-The aseqdump child only runs while a page is open. It does not subscribe to
+The aseqdump child runs permanently (mapped CCs and the button need it with no
+page open) and is restarted if it exits. It does not subscribe to
 Midi Through itself: amidiminder connects it (rule `Midi Through --> aseqdump`).
 When aseqdump subscribed itself with `-p`, amidiminder's "restore prior
 connection" could win the race and aseqdump exited with "resource busy".

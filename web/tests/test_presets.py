@@ -141,6 +141,10 @@ class PresetsTest(unittest.TestCase):
             with open(path) as f:
                 self.assertEqual(json.load(f), favourites.uris, 'the migrated list is written once')
             self.assertEqual(Favourites(path).load(known), favourites.uris)
+            # No preset list (the export failed): the stars are kept, not judged.
+            self.assertEqual(Favourites(path).load([]), favourites.uris)
+            with open(path) as f:
+                self.assertEqual(json.load(f), favourites.uris)
 
     def test_load_commands(self):
         uri = 'file:///x/out/electric.lv2/mki-amped.ttl'

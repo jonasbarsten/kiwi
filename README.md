@@ -207,7 +207,14 @@ again to finish. Mapped controls show `CC n`; in map mode a ✕ removes a mappin
   envelope have no mod-host ports, so the service forwards those CCs itself (the same path
   the sliders use, a few tens of milliseconds).
 - The map is global, not part of a slot: `~/.local/state/kiwi/ccmap.json`, written only when
-  a mapping changes, applied at boot. Delete the file to get the defaults back.
+  a mapping changes, applied at boot. To get the defaults back, delete the file and restart
+  `kiwi-host` (`sudo systemctl restart kiwi-host`; the page and mod-host both reload it).
+- The sampler envelope CCs (102–105) and the panic CCs are what the service itself sends
+  on channel 1, so it never learns from or forwards those; a controller on channel 1 drives
+  the envelope directly, which is what you want anyway.
+- Actions (panic, next, previous, save) fire when a CC crosses 64 upwards: a button, or a
+  knob turned past the middle, not every tick above it. A learn that nobody completes
+  expires after 30 s, and ends when the last page closes.
 
 ### Network
 
@@ -294,7 +301,8 @@ masked (never uninstalled; the list and how to undo it are in `install.sh`). Ver
 idle CPU and I/O priority with a 64 MB memory cap, talks to mod-host only while a page is
 open or a change is pending (and only after the patch loader and the preset restore have
 finished, since mod-host serves one client at a time), and lets go 10 s after the last
-need. Its MIDI monitor (`aseqdump`) runs permanently so mapped CCs and the button work with
+need — unless a Pianoteq or sampler-envelope CC mapping exists, in which case it stays
+connected so a knob move is never delayed by a reconnect. Its MIDI monitor (`aseqdump`) runs permanently so mapped CCs and the button work with
 no page open. The parameter list (`web/params.json`) is generated at install time from the
 installed plugins' `lv2info`, so the page never guesses a range.
 
@@ -313,7 +321,7 @@ journalctl -u kiwi-restore -b                     # which slot and mappings were
 ## Development
 
 ```bash
-python3 -m unittest discover -s web/tests -t web   # 147 tests, ~30 s, no Pi needed
+python3 -m unittest discover -s web/tests -t web   # ~30 s, no Pi needed
 make -C plugins/kiwi test                          # DSP unit tests for the custom plugins
 ./deploy.sh                                        # rsync + install.sh on the Pi
 ./deploy.sh --no-install                           # rsync only

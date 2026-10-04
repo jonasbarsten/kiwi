@@ -35,6 +35,7 @@ KEEPALIVE = 15.0
 IDLE_DISCONNECT = 10.0
 MAX_BODY = 16384
 PANIC_CCS = (120, 123)    # all sound off, all notes off
+LEARN_TIMEOUT = 30.0      # a map-mode learn nobody finishes stops waiting
 SAVE_FLASHES = 8          # a rapid burst on save ...
 SAVE_FLASH_INTERVAL = 0.1
 SLOT_FLASH_INTERVAL = 0.3  # ... and the slot number, countable but brisk, on a selection
@@ -469,6 +470,14 @@ class HostLink:
         sync never marks the slot dirty by itself)."""
         if value is None:
             return
+        if instance == reverbs.REVERB_INSTANCE:
+            param = self.applier.reverb.get(self.current_reverb, {}).get(symbol)
+            if param is None:
+                return
+            held = self.store.data['reverb_params'].get(self.current_reverb, {}).get(symbol, param['baseline'])
+            if abs(held - value) > 1e-6:
+                self.store.set_reverb_param(self.current_reverb, symbol, value, param['baseline'])
+            return
         param = self.applier.port.get((instance, symbol))
         if param is None:
             return
@@ -556,8 +565,15 @@ class HostLink:
     def _apply_maps(self):
         with self._lock:
             maps, self._maps = self._maps, []
-        for action, item in maps:
-            ok = map_port(self.client, item, self.ranges) if action == 'map' else unmap_port(self.client, item)
+        while maps:
+            action, item = maps[0]
+            try:
+                ok = map_port(self.client, item, self.ranges) if action == 'map' else unmap_port(self.client, item)
+            except HostError:
+                with self._lock:            # mod-host went away: keep what is left for the reconnect
+                    self._maps = maps + self._maps
+                raise
+            maps.pop(0)
             if not ok:
                 print(f'kiwi-web: mod-host refused {action} {item}', flush=True)
 
@@ -701,6 +717,12 @@ class App:
         self.store = StateStore(args.state_dir)
         self.store.load()
         self.presets = load_presets(args.presets)
+        if self.presets:
+            def migrated(uri):
+                found = presets.migrate_uris([uri], self.presets)
+                return found[0] if found else None
+            for n in self.store.migrate_presets(migrated):
+                print(f'kiwi-web: slot {n}: preset moved to the current export layout', flush=True)
         self.bundles = {p['uri']: p['bundle'] for p in self.presets}
         self.favourites = presets.Favourites(os.path.join(args.state_dir, 'favourites.json'))
         self.favourites.load(self.presets)
@@ -708,6 +730,14 @@ class App:
         self.mappings = ccmap.CcMap(os.path.join(args.state_dir, 'ccmap.json'), self.known_targets)
         self.mappings.load()
         self.learning = None                     # the target waiting for its CC, in map mode
+        self._learned = None
+        self._learning_since = 0.0
+        self._learn_lock = threading.Lock()
+        self.clock = time.monotonic
+        self._cc_last = {}                       # (channel, cc) -> last value seen, for action edges
+        # CCs this service sends itself (sampler envelope, panic) on channel 1.
+        self.own_ccs = {(0, int(q['cc'])) for p in self.meta['plugins'] for q in p['params'] if 'cc' in q}
+        self.own_ccs.update((channel, number) for channel in range(16) for number in PANIC_CCS)
         self.client = HostClient(('127.0.0.1', args.host_port))
         self.link = HostLink(self.model, self.client, self.meta, self.store,
                              units_ready or systemd_units_ready,
@@ -739,20 +769,37 @@ class App:
         elif kind == 'note_off':
             self.active_notes.discard(event['note'])
         elif kind == 'cc':
-            self.model.update(f"midi:cc:{event['controller']}", event['value'])
-            learning, self.learning = self.learning, None
-            if learning is not None:
-                self.link.request_map(event['channel'], event['controller'], learning)
-                self.model.update('map:learning', None)
+            channel, number, value = event['channel'], event['controller'], event['value']
+            self.model.update(f'midi:cc:{number}', value)
+            key = (channel, number)
+            previous = self._cc_last.get(key)
+            self._cc_last[key] = value
+            if key in self.own_ccs:
+                pass        # our own sends come back through Midi Through: never learn or forward them
+            elif self._take_learning() is not None:
+                self.link.request_map(channel, number, self._learned)
             else:
-                for target in self.mappings.targets(event['channel'], event['controller']):
-                    self._drive(target, event['value'])
+                for target in self.mappings.targets(channel, number):
+                    self._drive(target, value, previous)
         self.model.update('midi:notes', sorted(self.active_notes))
         self.model.update('midi:last', describe(event))
 
-    def _drive(self, target, value):
+    def _take_learning(self):
+        """The target waiting for this CC, if any (and no longer waiting after). A
+        learn nobody finishes expires, so it cannot eat a knob move mid-song."""
+        with self._learn_lock:
+            target, self.learning = self.learning, None
+            self._learned = target
+            if target is not None and self.clock() - self._learning_since > LEARN_TIMEOUT:
+                target = self._learned = None
+        if target is not None or self.model.get('map:learning') is not None:
+            self.model.update('map:learning', None)
+        return target
+
+    def _drive(self, target, value, previous=None):
         """One mapped CC arrived: ports changed inside mod-host already (RAM re-reads
-        them); the rest is this service's job."""
+        them); the rest is this service's job. Actions fire on the press (the value
+        crossing 64 upwards), not on every message a knob sends above it."""
         kind = target['kind']
         if kind == 'port':
             self.link.request_read(target['instance'], target['symbol'])
@@ -762,7 +809,7 @@ class App:
             self.link.set_value(kind, target['instance'], name, low + (high - low) * value / 127)
         elif target['name'] == 'morph':
             self.link.request_morph(value / 127)
-        elif value >= 64:
+        elif value >= 64 and (previous is None or previous < 64):
             if target['name'] == 'panic':
                 self.panic()
             elif target['name'] == 'slot_next':
@@ -780,12 +827,15 @@ class App:
         target = ccmap.normalise(target, self.known_targets)
         if target is None:
             return False
-        self.learning = target
+        with self._learn_lock:
+            self.learning = target
+            self._learning_since = self.clock()
         self.model.update('map:learning', target)
         return True
 
     def cancel_learning(self):
-        self.learning = None
+        with self._learn_lock:
+            self.learning = None
         self.model.update('map:learning', None)
 
     def unmap(self, target):
@@ -833,7 +883,10 @@ class App:
     def close_stream(self):
         with self._streams_lock:
             self._streams -= 1
+            last = self._streams == 0
         self.link.remove_viewer()
+        if last and self.learning is not None:
+            self.cancel_learning()      # the page that asked is gone
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1079,7 +1132,11 @@ def restore(args):
     ranges = port_ranges(meta)
     try:
         failures = execute_ops(client, midi, cc_controls(meta), ops, bundles=bundles)
+        reverb_symbols = applier.reverb.get(applier.effective_reverb(store.data), {})
         for mapping in ports:
+            target = mapping['target']
+            if target['instance'] == reverbs.REVERB_INSTANCE and target['symbol'] not in reverb_symbols:
+                continue                # belongs to a reverb that is not in the slot right now
             failures += not map_port(client, mapping, ranges)
     except HostError as error:
         # Logged, not fatal: a failed unit would keep kiwi-web waiting.

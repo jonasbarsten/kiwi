@@ -19,7 +19,8 @@ client=${2:-${CLIENT_WIFI_SSID:-}}
 case "$mode" in
     hotspot)
         if [ -n "$client" ]; then
-            sudo nmcli connection modify "$client" connection.autoconnect no
+            # A missing client connection must not stop the hotspot from coming up.
+            sudo nmcli connection modify "$client" connection.autoconnect no || true
         fi
         sudo nmcli connection modify "$HOTSPOT" connection.autoconnect yes
         sudo nmcli connection up "$HOTSPOT"

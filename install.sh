@@ -98,9 +98,13 @@ section "Wi-Fi connections"
 # optionally a network with internet for development. Existing connections are kept.
 env_file="$KIWI_DIR/kiwi.env"
 if [ -f "$env_file" ]; then
+    chmod 600 "$env_file"       # it holds Wi-Fi passwords
     # shellcheck source=/dev/null
     . "$env_file"
-    if ! nmcli -t -f NAME connection show | grep -qx kiwi-hotspot; then
+    if [ -n "${HOTSPOT_PASSWORD:-}" ] && [ "${#HOTSPOT_PASSWORD}" -lt 8 ]; then
+        fail "HOTSPOT_PASSWORD in kiwi.env must be at least 8 characters (WPA2)"
+    fi
+    if ! nmcli -t -f NAME connection show | grep -Fqx kiwi-hotspot; then
         if [ -n "${HOTSPOT_PASSWORD:-}" ]; then
             sudo nmcli connection add type wifi ifname wlan0 con-name kiwi-hotspot autoconnect yes \
                 ssid "${HOTSPOT_SSID:-kiwi}" 802-11-wireless.mode ap 802-11-wireless.band bg \
@@ -112,7 +116,7 @@ if [ -f "$env_file" ]; then
             echo "no HOTSPOT_PASSWORD in kiwi.env: hotspot not created"
         fi
     fi
-    if [ -n "${CLIENT_WIFI_SSID:-}" ] && ! nmcli -t -f NAME connection show | grep -qx "$CLIENT_WIFI_SSID"; then
+    if [ -n "${CLIENT_WIFI_SSID:-}" ] && ! nmcli -t -f NAME connection show | grep -Fqx "$CLIENT_WIFI_SSID"; then
         sudo nmcli connection add type wifi ifname wlan0 con-name "$CLIENT_WIFI_SSID" autoconnect no \
             ssid "$CLIENT_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${CLIENT_WIFI_PASSWORD:-}" >/dev/null
         echo "created client connection $CLIENT_WIFI_SSID (switch with host/kiwi-wifi)"

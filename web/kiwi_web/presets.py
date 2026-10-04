@@ -158,7 +158,7 @@ class Favourites:
         except (OSError, ValueError):
             loaded = []
         uris = [u for u in loaded if isinstance(u, str)] if isinstance(loaded, list) else []
-        if known is not None:
+        if known:       # with no preset list at all (export missing) nothing can be judged: keep the stars
             uris = migrate_uris(uris, known)
             if uris != loaded:
                 self.uris = uris
