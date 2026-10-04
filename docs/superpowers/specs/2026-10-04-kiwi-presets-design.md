@@ -130,7 +130,17 @@ params, CCs). With no slot files it does nothing.
   `journalctl` shows the actions); `find ~ /var -newer <marker>` empty after 10 minutes of
   playing, knob turning and morphing; reboot lands in the selected slot; journal size cap.
 
-## 10. Risks
+## 10. Deviations found while building (2026-10-04)
+
+- The LED's sysfs interface only flashes a count; "one long blink" on save is one flash.
+- Two more periodic writers were found and stopped: `systemd-timesyncd` (clock file every
+  minute → `SaveIntervalSec=infinity`) and `cron` (hourly `fake-hwclock`, daily jobs →
+  disabled). With those, 90 s of playing/knobs/morph under `kiwi-stress` wrote no file.
+- A reverb switch always sends the reverb's full baseline set: a re-added plugin starts
+  from its own defaults, not the patch's.
+- The sheet of eight slots is opened with a ☰ button rather than always shown.
+
+## 11. Risks
 
 - Applying a slot sends ~40 commands (more with Pianoteq parameters) in one burst while audio
   runs; a reverb switch cuts the tail. Measured per-switch blips are rare; a slot change is

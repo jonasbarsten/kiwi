@@ -115,6 +115,28 @@ footer {
   padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); background: var(--skin);
   border-top: 3px solid var(--fuzz); font-size: 14px;
 }
+/* Preset bar: slot, name, prev/next, save, morph. Wraps on phones. */
+.presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 14px; }
+.presets .slot { display: flex; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 0; }
+.presets .slot .num {
+  width: 44px; height: 44px; border-radius: 12px; background: var(--flesh); color: var(--seed);
+  display: grid; place-items: center; font-weight: 800; font-size: 20px; flex: none;
+}
+.presets .slot input {
+  flex: 1; min-width: 0; font: inherit; font-size: 17px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--core); min-height: 44px;
+}
+.presets .nav { display: flex; gap: 6px; }
+.presets .nav button { font-size: 22px; min-width: 52px; }
+#save.on { background: var(--warn); border-color: var(--warn); color: var(--seed); }
+.morph { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 0 14px 10px; }
+.morph .target { font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.slots[hidden] { display: none; }
+.slots button { display: flex; align-items: center; gap: 10px; text-align: left; padding: 0 12px; min-height: 48px; }
+.slots button b { width: 28px; flex: none; }
+.slots button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 768px) { .slots { grid-template-columns: repeat(4, 1fr); } }
 @media (min-width: 768px) {
   main { grid-template-columns: 1fr 1fr; padding-left: 16px; padding-right: 16px; }
   .modes { grid-template-columns: repeat(3, 1fr); }
@@ -137,6 +159,26 @@ footer {
   <span class="dot" id="mididot" title="MIDI in"></span>
 </header>
 <main id="main">
+  <section class="card wide" style="padding: 0">
+    <div class="presets">
+      <div class="slot">
+        <span class="num" id="slotnum">1</span>
+        <input id="slotname" type="text" maxlength="40" autocomplete="off" aria-label="preset name">
+      </div>
+      <div class="nav">
+        <button type="button" id="prev" aria-label="previous preset">◀</button>
+        <button type="button" id="next" aria-label="next preset">▶</button>
+        <button type="button" id="save">Save</button>
+        <button type="button" id="slotsbtn" aria-label="all presets">☰</button>
+      </div>
+    </div>
+    <div class="morph">
+      <span class="target">morph</span>
+      <input type="range" id="morph" min="0" max="1" step="0.001" value="0" aria-label="morph to next preset">
+      <span class="target" id="morphto">→ 2</span>
+    </div>
+    <div class="slots" id="slots" hidden style="padding: 0 14px 14px"></div>
+  </section>
   <section class="card wide">
     <h2>Mix</h2>
     <div class="modes" id="modes"></div>
@@ -152,7 +194,7 @@ footer {
   </section>
 </main>
 <footer>
-  <span id="saved">autosave on</span>
+  <span id="saved">no unsaved changes</span>
   <span class="spacer"></span>
   <button type="button" id="reset">Reset to patch</button>
 </footer>
@@ -532,8 +574,9 @@ function apply(delta) {
       $('cpu').textContent = v === null ? 'cpu –' : `cpu ${v}%`;
     } else if (key === 'status:temp') {
       $('temp').textContent = v === null ? '–°C' : `${v}°C`;
-    } else if (key === 'status:saved') {
-      $('saved').textContent = `saved ${new Date(v * 1000).toLocaleTimeString()}`;
+    } else if (key.startsWith('slot:') || key === 'morph:value') {
+      slotState[key] = v;
+      renderSlots();
     } else if (key === 'midi:notes') {
       lightSeeds(v);
     } else if (key === 'midi:last') {
@@ -575,8 +618,71 @@ function disconnect() {
 document.addEventListener('visibilitychange', () => (document.hidden ? disconnect() : connect()));
 
 $('reset').addEventListener('click', async () => {
-  if (!confirm('Reset every value to the patch defaults?')) return;
-  await fetch('/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!confirm('Reset every value to the patch defaults? (RAM only: the saved preset is untouched.)')) return;
+  await post('/reset');
+});
+
+// ----- presets --------------------------------------------------------------
+
+const slotState = { 'slot:current': 1, 'slot:name': '', 'slot:names': [], 'slot:dirty': false, 'morph:value': 0 };
+let editingName = false;
+
+async function post(path, body) {
+  try {
+    await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body || {}) });
+  } catch (error) {
+    setHost('offline');
+  }
+}
+
+function renderSlots() {
+  const current = slotState['slot:current'];
+  const names = slotState['slot:names'];
+  const total = (meta && meta.slots) || 8;
+  $('slotnum').textContent = current;
+  if (!editingName) $('slotname').value = slotState['slot:name'];
+  $('save').classList.toggle('on', slotState['slot:dirty']);
+  $('saved').textContent = slotState['slot:dirty'] ? 'unsaved changes (hold the button or tap Save)' : 'saved';
+  const nextSlot = (current % total) + 1;
+  $('morphto').textContent = `→ ${nextSlot}${names[nextSlot - 1] ? ' ' + names[nextSlot - 1] : ''}`;
+  if (dragging !== 'morph') $('morph').value = slotState['morph:value'];
+  const box = $('slots');
+  box.replaceChildren();
+  for (let n = 1; n <= total; n++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.classList.toggle('on', n === current);
+    const num = document.createElement('b');
+    num.textContent = n;
+    const name = document.createElement('span');
+    name.textContent = names[n - 1] || `Preset ${n}`;
+    button.append(num, name);
+    button.addEventListener('click', () => {
+      if (n !== current && slotState['slot:dirty'] && !confirm('Discard unsaved changes?')) return;
+      post('/slot/select', { slot: n });
+    });
+    box.appendChild(button);
+  }
+}
+
+$('prev').addEventListener('click', () => post('/slot/prev'));
+$('next').addEventListener('click', () => post('/slot/next'));
+$('save').addEventListener('click', () => post('/slot/save'));
+$('slotsbtn').addEventListener('click', () => { $('slots').hidden = !$('slots').hidden; });
+$('slotname').addEventListener('focus', () => { editingName = true; });
+$('slotname').addEventListener('blur', () => { editingName = false; renderSlots(); });
+$('slotname').addEventListener('change', () => {
+  const name = $('slotname').value.trim();
+  if (name) post('/slot/name', { name });
+});
+$('slotname').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('slotname').blur(); });
+
+let morphTimer = null;
+$('morph').addEventListener('pointerdown', () => { dragging = 'morph'; });
+$('morph').addEventListener('input', () => {
+  if (morphTimer) return;
+  morphTimer = setTimeout(() => { morphTimer = null; post('/morph', { value: parseFloat($('morph').value) }); }, 60);
 });
 
 function load() {

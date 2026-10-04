@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Pisound button → kiwi-web, on loopback. Installed as kiwi-btn-next, kiwi-btn-prev
+# and kiwi-btn-save (symlinks); the action comes from the name it was called by.
+# pisound-btn passes click/hold details as arguments; they are not needed.
+action=${0##*kiwi-btn-}
+case "$action" in
+    next|prev|save) ;;
+    *) logger -t kiwi-btn "unknown action '$action'"; exit 2 ;;
+esac
+code=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d '{}' "http://127.0.0.1/slot/$action" || echo 000)
+if [ "$code" != 204 ]; then
+    logger -t kiwi-btn "$action failed (kiwi-web answered $code)"
+    exit 1
+fi

@@ -123,6 +123,33 @@ for unit in fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.s
 done
 systemctl --user stop pulseaudio.service pulseaudio.socket 2>/dev/null || true
 
+section "Journal in RAM"
+sudo install -D -m 644 "$KIWI_DIR/system/journald-kiwi.conf" /etc/systemd/journald.conf.d/kiwi.conf
+if [ -d /var/log/journal ]; then
+    # The persistent journal (2.8 GB of xrun lines at one point) goes; logs now live in RAM.
+    sudo systemctl restart systemd-journald
+    sudo rm -rf /var/log/journal
+fi
+sudo systemctl restart systemd-journald
+journalctl --disk-usage
+
+section "No periodic disk writes"
+# cron ran fake-hwclock hourly and apt/dpkg/logrotate/man-db daily; timesyncd saved
+# its clock file every minute. Nothing on this box needs them.
+sudo systemctl disable --now cron 2>/dev/null || true
+sudo install -D -m 644 "$KIWI_DIR/system/timesyncd-kiwi.conf" /etc/systemd/timesyncd.conf.d/kiwi.conf
+sudo systemctl restart systemd-timesyncd
+
+section "Presets: button and LED"
+for action in next prev save; do
+    sudo ln -sfn "$KIWI_DIR/host/kiwi-btn" "/usr/local/bin/kiwi-btn-$action"
+done
+chmod +x "$KIWI_DIR/host/kiwi-btn"
+sudo install -m 644 "$KIWI_DIR/system/pisound.conf" /etc/pisound.conf
+sudo systemctl restart pisound-btn
+sudo install -m 644 "$KIWI_DIR/system/kiwi-tmpfiles.conf" /etc/tmpfiles.d/kiwi.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/kiwi.conf
+
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"
 mv "$KIWI_DIR/web/params.json.tmp" "$KIWI_DIR/web/params.json"
