@@ -153,7 +153,7 @@ knob turning and morphing under `kiwi-stress` wrote no file.
 | Save RAM into the current slot | hold 3 s (saves the moment 3 s pass; no need to release) | **Save** (orange when there are unsaved changes) |
 | Pick any slot, rename | — | ☰ sheet; the name field (saved with the slot) |
 
-The LED stays dark while holding, flashes the slot number (0.2 s apart) on a selection and
+The LED stays dark while holding, flashes the slot number (0.3 s apart) on a selection and
 gives a rapid burst of 8 flashes (0.1 s apart) when a save happens. (The
 Pisound's LED file takes a flash *duration*, one flash per write, so the patterns are paced
 by `kiwi-web`.) (`pisound-btn` only reports holds on release, so the
