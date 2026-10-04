@@ -140,7 +140,8 @@ a full-screen app.
   MIDI device (`snd-virmidi`, routed into Midi Through), so they reach sfizz like any
   knob; the values are part of the preset.
 - **Sections**: limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
-  (curated) and Pianoteq (all parameters). Routing-critical settings are not offered.
+  (curated) and Pianoteq (all parameters). On a wide screen the cards in a grid row open
+  and close together. Routing-critical settings are not offered.
   Pianoteq values show "–" until set from the page (mod-host cannot read them back).
   Sliders apply while you drag: Pianoteq and reverb changes at most every 150 ms (they
   recompute inside the audio thread), everything else every 50 ms.
