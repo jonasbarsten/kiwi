@@ -36,7 +36,7 @@ MAX_BODY = 16384
 MORPH_CC = 27
 SAVE_FLASHES = 8          # a rapid burst on save ...
 SAVE_FLASH_INTERVAL = 0.1
-SLOT_FLASH_INTERVAL = 0.4  # ... and the slot number, slowly, on a selection
+SLOT_FLASH_INTERVAL = 0.2  # ... and the slot number, countable but brisk, on a selection
 
 
 class Model:
