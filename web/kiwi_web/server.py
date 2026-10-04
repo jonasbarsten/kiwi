@@ -34,7 +34,9 @@ KEEPALIVE = 15.0
 IDLE_DISCONNECT = 10.0
 MAX_BODY = 16384
 MORPH_CC = 27
-SAVE_FLASHES = 8   # a rapid burst on save; a slot selection flashes the slot number
+SAVE_FLASHES = 8          # a rapid burst on save ...
+SAVE_FLASH_INTERVAL = 0.1
+SLOT_FLASH_INTERVAL = 0.4  # ... and the slot number, slowly, on a selection
 
 
 class Model:
@@ -425,7 +427,7 @@ class HostLink:
         self.current_reverb = self.applier.effective_reverb(self.store.data)
         self.model.update('morph:value', 0.0)
         self._publish_state()
-        self.led.blink(slot)
+        self.led.blink(slot, SLOT_FLASH_INTERVAL)
 
     def _apply_save(self):
         with self._lock:
@@ -434,7 +436,7 @@ class HostLink:
             return
         self.store.save()
         self._publish_state()
-        self.led.blink(SAVE_FLASHES)
+        self.led.blink(SAVE_FLASHES, SAVE_FLASH_INTERVAL)
 
     def _apply_reset(self):
         with self._lock:

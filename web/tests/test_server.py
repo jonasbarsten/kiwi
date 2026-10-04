@@ -329,7 +329,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(saved['params'], {'5:piano_vol': 0.3})
         self.assertEqual(saved['name'], 'Warm')
         self.assertEqual(self.read_until(response, 'slot:names')['slot:names'][0], 'Warm')
-        self.assertEqual(self.led(), '8')
+        self.assertEqual(self.app.link.led.last, (8, 0.1), 'a save is a rapid burst')
         conn.close()
 
     def test_slot_select_applies_slot_and_resets_leftovers(self):
@@ -350,7 +350,7 @@ class ServerTest(unittest.TestCase):
         with open(self.midi_path, 'rb') as f:
             self.assertEqual(f.read(), b'\xb0\x69\x7f')
         self.assertEqual(self.read_until(response, 'slot:name', 'Two')['slot:name'], 'Two')
-        self.assertEqual(self.led(), '2')
+        self.assertEqual(self.app.link.led.last, (2, 0.4), 'a selection flashes the slot number, slowly')
         with open(os.path.join(self.state_dir, 'current')) as f:
             self.assertEqual(f.read().strip(), '2')
 
