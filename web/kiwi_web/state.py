@@ -91,7 +91,7 @@ class StateStore:
         return os.path.join(self.directory, 'presets', f'{slot}.json')
 
     def _check(self, slot):
-        if not isinstance(slot, int) or not 1 <= slot <= self.slots:
+        if type(slot) is not int or not 1 <= slot <= self.slots:
             raise ValueError(f'slot must be 1..{self.slots}')
 
     def read_slot(self, slot):

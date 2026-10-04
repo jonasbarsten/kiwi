@@ -34,6 +34,7 @@ KEEPALIVE = 15.0
 IDLE_DISCONNECT = 10.0
 MAX_BODY = 16384
 MORPH_CC = 27
+SAVE_FLASHES = 8   # a rapid burst on save; a slot selection flashes the slot number
 
 
 class Model:
@@ -77,7 +78,9 @@ def read_temperature(path='/sys/class/thermal/thermal_zone0/temp'):
 
 
 def systemd_units_ready(run=subprocess.run):
-    """True once kiwi-patch and kiwi-restore have finished since kiwi-host last started.
+    """Falsy until kiwi-patch and kiwi-restore have finished since kiwi-host last
+    started; then a token that changes whenever kiwi-host starts again (the link
+    reloads its slot when it sees a new token, because kiwi-restore re-applied it).
 
     A failed loader counts as finished (it no longer needs mod-host); a state left
     over from the previous host start does not.
@@ -93,9 +96,10 @@ def systemd_units_ready(run=subprocess.run):
     if host.get('ActiveState') != 'active':
         return False
     started = int(host.get('ActiveEnterTimestampMonotonic') or 0)
-    return all(unit.get('ActiveState') in ('active', 'failed')
-               and int(unit.get('StateChangeTimestampMonotonic') or 0) >= started
-               for unit in loaders)
+    finished = all(unit.get('ActiveState') in ('active', 'failed')
+                   and int(unit.get('StateChangeTimestampMonotonic') or 0) >= started
+                   for unit in loaders)
+    return f'host-{started}' if finished else False
 
 
 def param_name(plugin, param):
@@ -171,9 +175,11 @@ class HostLink:
         self._reverb = None
         self._reset = False
         self._select = None
+        self._step = 0
         self._save = False
         self._morph = None
         self._name = None
+        self._host_token = None
         self._viewers = 0
         self._last_need = None
         self._wake = threading.Event()
@@ -207,8 +213,18 @@ class HostLink:
         self._wake.set()
 
     def request_read(self, instance, symbol):
+        # A knob moved inside mod-host: RAM must learn the value even with no page open.
         with self._lock:
             self._reads.add((instance, symbol))
+            self._last_need = self.clock()
+        self._wake.set()
+
+    def request_step(self, delta):
+        """Next/previous relative to the slot that is current when it is applied,
+        so two quick clicks move two slots even if the first is still in flight."""
+        with self._lock:
+            self._step += delta
+            self._last_need = self.clock()
         self._wake.set()
 
     def request_reverb(self, reverb_id):
@@ -226,8 +242,14 @@ class HostLink:
     def request_morph(self, t):
         self._request('_morph', min(max(float(t), 0.0), 1.0))
 
-    def request_name(self, name):
-        self._request('_name', name)
+    def request_name(self, name, slot=None):
+        """Renames the current slot; refused (False) if `slot` names another one."""
+        with self._lock:
+            if slot is not None and slot != self.store.slot:
+                return False
+            self._name = name
+        self._wake.set()
+        return True
 
     def stop(self):
         self._stop = True
@@ -235,9 +257,8 @@ class HostLink:
 
     def _needed(self):
         with self._lock:
-            if (self._viewers > 0 or self._sets or self._reset or self._reverb is not None
-                    or self._select is not None or self._save or self._morph is not None
-                    or self._name is not None):
+            if (self._viewers > 0 or self._sets or self._reads or self._reset or self._reverb is not None
+                    or self._select is not None or self._step or self._save or self._morph is not None):
                 return True
             return self._last_need is not None and self.clock() - self._last_need < IDLE_DISCONNECT
 
@@ -249,7 +270,9 @@ class HostLink:
         while not self._stop:
             self._wake.wait(timeout=0.2)
             self._wake.clear()
+            # Renaming and saving are RAM/disk only: they must work while mod-host is away.
             self._apply_name()
+            self._apply_save()
             if not self._needed():
                 if self.client.connected:
                     self.client.close()
@@ -258,8 +281,8 @@ class HostLink:
             if not self.client.connected and not self._connect():
                 continue
             try:
+                self._apply_reads()      # knob moves first, so a save or select sees them
                 self._apply_select()
-                self._apply_save()
                 self._apply_reset()
                 self._apply_reverb()
                 self._apply_morph()
@@ -284,20 +307,35 @@ class HostLink:
                 self._wake.wait(timeout=2.0)
 
     def _connect(self):
-        if not self.units_ready():
+        token = self.units_ready()
+        if not token:
             self.model.update('status:host', 'starting')
             self._wake.wait(timeout=1.0)
             return False
+        if self._host_token is not None and token != self._host_token:
+            # mod-host restarted and kiwi-restore re-applied the saved slot: unsaved
+            # RAM edits are gone from the instrument, so RAM follows.
+            self.store.load()
+            self.current_reverb = self.applier.effective_reverb(self.store.data)
+            with self._lock:
+                self._sets.clear()
+                self._reads.clear()
+                self._morph = None
+            self.model.update('morph:value', 0.0)
+        self._host_token = token
         try:
             self.client.connect()
+            # RAM takes the instrument's readable values (a knob may have moved while
+            # the link was idle, or kiwi-web may have restarted with edits still playing).
             for instance, symbol in self.port_params:
-                self._read(instance, symbol)
-            self._read_reverb()
+                self._learn(instance, symbol, self._read(instance, symbol))
+            self._read_reverb(into_store=True)
         except (OSError, HostError):
             self.model.update('status:host', 'offline')
             self._wake.wait(timeout=2.0)
             return False
         self.model.update('status:host', 'online')
+        self._publish_state()
         return True
 
     # ----- model bookkeeping --------------------------------------------------------
@@ -321,9 +359,25 @@ class HostLink:
             self.model.update(f'port:{instance}:{symbol}', value)
         return value
 
-    def _read_reverb(self):
-        for symbol in self.applier.reverb.get(self.current_reverb, {}):
-            self._read(reverbs.REVERB_INSTANCE, symbol)
+    def _learn(self, instance, symbol, value):
+        """Records a value read from mod-host in RAM, only if RAM disagrees (so a
+        sync never marks the slot dirty by itself)."""
+        if value is None:
+            return
+        param = self.applier.port.get((instance, symbol))
+        if param is None:
+            return
+        held = self.store.data['params'].get(f'{instance}:{symbol}', param['baseline'])
+        if abs(held - value) > 1e-6:
+            self.store.set_param(instance, symbol, value, param['baseline'])
+
+    def _read_reverb(self, into_store=False):
+        for symbol, param in self.applier.reverb.get(self.current_reverb, {}).items():
+            value = self._read(reverbs.REVERB_INSTANCE, symbol)
+            if into_store and value is not None:
+                held = self.store.data['reverb_params'].get(self.current_reverb, {}).get(symbol, param['baseline'])
+                if abs(held - value) > 1e-6:
+                    self.store.set_reverb_param(self.current_reverb, symbol, value, param['baseline'])
 
     def _on_applied(self, op):
         kind = op[0]
@@ -353,12 +407,16 @@ class HostLink:
     def _apply_select(self):
         with self._lock:
             slot, self._select = self._select, None
-        if slot is None:
+            step, self._step = self._step, 0
+        if slot is None and step == 0:
             return
+        if slot is None:
+            slot = (self.store.slot - 1 + step) % self.store.slots + 1
         previous = json.loads(json.dumps(self.store.data))
         self.store.select(slot)
         with self._lock:
             self._sets.clear()
+            self._reads.clear()
             self._morph = None
             self._reverb = None
         failures = self._execute(self.applier.ops(previous, self.store.data, replace=True))
@@ -376,7 +434,7 @@ class HostLink:
             return
         self.store.save()
         self._publish_state()
-        self.led.blink(1)
+        self.led.blink(SAVE_FLASHES)
 
     def _apply_reset(self):
         with self._lock:
@@ -453,9 +511,7 @@ class HostLink:
         with self._lock:
             reads, self._reads = self._reads, set()
         for instance, symbol in reads:
-            value = self._read(instance, symbol)
-            if value is not None:
-                self.store.set_param(instance, symbol, value, self.applier.port.get((instance, symbol), {}).get('baseline'))
+            self._learn(instance, symbol, self._read(instance, symbol))
         if reads:
             self.model.update('slot:dirty', self.store.dirty)
 
@@ -639,8 +695,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self._outsider():
             return
-        # Requests from the Pi itself (the button scripts) carry no Origin.
-        if not self._loopback() and not security.same_origin(self.headers.get('Origin'), self.headers.get('Host')):
+        # The button scripts post from the Pi itself with no Origin; only the slot
+        # endpoints get that exemption.
+        path = self.path.split('?', 1)[0]
+        button_request = self._loopback() and path.startswith('/slot/')
+        if not button_request and not security.same_origin(self.headers.get('Origin'), self.headers.get('Host')):
             self._send(403, b'cross-origin request refused\n')
             return
         try:
@@ -658,7 +717,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not isinstance(body, dict):
             body = {}
-        path = self.path.split('?', 1)[0]
         link = self.app.link
         store = self.app.store
         if path == '/set':
@@ -673,14 +731,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(400, b'unknown reverb\n')
         elif path == '/slot/next':
-            link.request_select(store.slot % store.slots + 1)
+            link.request_step(+1)
             self._send(204)
         elif path == '/slot/prev':
-            link.request_select((store.slot - 2) % store.slots + 1)
+            link.request_step(-1)
             self._send(204)
         elif path == '/slot/select':
             slot = body.get('slot')
-            if isinstance(slot, int) and 1 <= slot <= store.slots:
+            if type(slot) is int and 1 <= slot <= store.slots:
                 link.request_select(slot)
                 self._send(204)
             else:
@@ -690,11 +748,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(204)
         elif path == '/slot/name':
             name = body.get('name')
-            if isinstance(name, str) and name.strip():
-                link.request_name(name)
+            slot = body.get('slot')
+            if not isinstance(name, str) or not name.strip():
+                self._send(400, b'bad name\n')
+            elif link.request_name(name, slot if type(slot) is int else None):
                 self._send(204)
             else:
-                self._send(400, b'bad name\n')
+                self._send(409, b'that slot is no longer current\n')
         elif path == '/morph':
             value = body.get('value')
             if isinstance(value, (int, float)) and math.isfinite(value):

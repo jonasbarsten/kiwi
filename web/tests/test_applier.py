@@ -105,12 +105,21 @@ class MorphTest(unittest.TestCase):
         self.assertNotIn('7:truepeak', mid['params'])
         self.assertNotIn('1:sample_quality', mid['params'])
         self.assertEqual(mid['patch_params'], {})
-        self.assertIsNone(mid['reverb'])
+        self.assertEqual(mid['reverb'], 'zita', 'the reverb choice is carried over, never morphed')
 
     def test_morph_reverb_params_only_when_same_reverb(self):
         b = dict(self.b, reverb='calf')
         self.assertEqual(self.applier.morph(self.a, b, 0.5, 'zita')['reverb_params'], {})
         self.assertEqual(self.applier.morph(self.a, self.b, 0.5, 'calf')['reverb_params'], {})
+
+    def test_morph_with_non_default_reverb_does_not_switch_it(self):
+        a = dict(self.a, reverb='calf', reverb_params={'calf': {'decay_time': 1.0}})
+        b = dict(self.b, reverb='calf', reverb_params={'calf': {'decay_time': 3.0}})
+        target = self.applier.morph(a, b, 0.5, 'calf')
+        self.assertEqual(target['reverb'], 'calf')
+        ops = self.applier.ops(dict(a), target, replace=False)
+        self.assertFalse([op for op in ops if op[0] == 'reverb'], ops)
+        self.assertIn(('port', 6, 'decay_time', 2.0), ops)
 
     def test_effective_reverb(self):
         self.assertEqual(self.applier.effective_reverb(doc()), 'zita')

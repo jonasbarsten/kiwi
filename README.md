@@ -150,10 +150,12 @@ knob turning and morphing under `kiwi-stress` wrote no file.
 |---|---|---|
 | Next preset | single click | ▶ |
 | Previous preset | double click | ◀ |
-| Save RAM into the current slot | hold ≥ 3 s | **Save** (orange when there are unsaved changes) |
+| Save RAM into the current slot | hold 3 s (saves the moment 3 s pass; no need to release) | **Save** (orange when there are unsaved changes) |
 | Pick any slot, rename | — | ☰ sheet; the name field (saved with the slot) |
 
-The LED blinks the slot number on a selection and once on a save. The box boots into the
+The LED stays dark while holding, flashes the slot number on a selection and gives a rapid
+burst of 8 flashes when a save happens. (`pisound-btn` only reports holds on release, so the
+hold-to-save timer lives in the `DOWN`/`UP` scripts, `host/kiwi-btn`.) The box boots into the
 **last selected** slot: selecting writes the one-line `~/.local/state/kiwi/current`, the only
 write outside saving; slots are `~/.local/state/kiwi/presets/<n>.json`. Selecting a slot
 discards unsaved RAM edits and resets anything the previous slot had changed, so sounds do not

@@ -4,6 +4,8 @@ After=network.target kiwi-host.service
 
 [Service]
 User=patch
+# The Pisound LED is blinked for preset feedback; its sysfs file is root-only by default.
+ExecStartPre=+/bin/sh -c 'chgrp audio /sys/kernel/pisound/led && chmod 664 /sys/kernel/pisound/led'
 ExecStart=/usr/bin/python3 /home/patch/kiwi/web/kiwi-web
 # Never compete with audio: idle CPU and I/O class, capped memory.
 Nice=19

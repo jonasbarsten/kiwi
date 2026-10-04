@@ -141,14 +141,13 @@ sudo install -D -m 644 "$KIWI_DIR/system/timesyncd-kiwi.conf" /etc/systemd/times
 sudo systemctl restart systemd-timesyncd
 
 section "Presets: button and LED"
-for action in next prev save; do
+for action in next prev save down up; do
     sudo ln -sfn "$KIWI_DIR/host/kiwi-btn" "/usr/local/bin/kiwi-btn-$action"
 done
 chmod +x "$KIWI_DIR/host/kiwi-btn"
 sudo install -m 644 "$KIWI_DIR/system/pisound.conf" /etc/pisound.conf
 sudo systemctl restart pisound-btn
-sudo install -m 644 "$KIWI_DIR/system/kiwi-tmpfiles.conf" /etc/tmpfiles.d/kiwi.conf
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/kiwi.conf
+sudo rm -f /etc/tmpfiles.d/kiwi.conf   # the LED permission is now set by kiwi-web.service
 
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"

@@ -15,7 +15,17 @@ class FakeHost:
         self.close_after = close_after
         self.server = socket.create_server(('127.0.0.1', 0))
         self.port = self.server.getsockname()[1]
+        self._conn = None
         threading.Thread(target=self._serve, daemon=True).start()
+
+    def drop(self):
+        """Closes the current client's connection, as a mod-host restart would."""
+        conn = self._conn
+        if conn is not None:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def _serve(self):
         while True:
@@ -23,6 +33,7 @@ class FakeHost:
                 conn, _ = self.server.accept()
             except OSError:
                 return
+            self._conn = conn
             with conn:
                 buffer = b''
                 while True:

@@ -82,8 +82,11 @@ class Applier:
     def morph(self, a, b, t, reverb_id):
         """A document between `a` (t = 0) and `b` (t = 1) for continuous parameters only."""
         t = min(max(float(t), 0.0), 1.0)
+        # The reverb choice is never morphed: the target keeps the current one, so
+        # applying it against RAM never emits a reverb switch.
         target = {'params': {}, 'patch_params': {}, 'preset': None, 'favourites': [],
-                  'reverb': None, 'reverb_params': {}, 'cc': {}, 'name': ''}
+                  'reverb': reverb_id if reverb_id in self.reverb else None,
+                  'reverb_params': {}, 'cc': {}, 'name': ''}
 
         def blend(section, key, baseline):
             start = a[section].get(key, baseline)

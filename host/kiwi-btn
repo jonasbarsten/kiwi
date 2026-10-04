@@ -1,15 +1,44 @@
 #!/usr/bin/env bash
-# Pisound button → kiwi-web, on loopback. Installed as kiwi-btn-next, kiwi-btn-prev
-# and kiwi-btn-save (symlinks); the action comes from the name it was called by.
-# pisound-btn passes click/hold details as arguments; they are not needed.
+# Pisound button → kiwi-web, on loopback. Installed as symlinks kiwi-btn-<action>;
+# the action comes from the name it was called by. pisound-btn (root) passes
+# click/hold details as arguments; they are not needed.
+#
+#   next / prev   select the next / previous preset slot (single / double click)
+#   save          save RAM into the current slot
+#   down / up     press / release: a hold of HOLD_SECONDS saves at the moment the
+#                 threshold passes (pisound-btn itself only reports holds on release)
+HOLD_SECONDS=3
+pidfile=/run/kiwi-btn-hold.pid
+bindir=$(dirname "$0")
 action=${0##*kiwi-btn-}
+
+post() {
+    code=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+        -d '{}' "http://127.0.0.1/slot/$1")
+    if [ "$code" != 204 ]; then
+        logger -t kiwi-btn "$1 failed (kiwi-web answered $code)"
+        exit 1
+    fi
+}
+
 case "$action" in
-    next|prev|save) ;;
-    *) logger -t kiwi-btn "unknown action '$action'"; exit 2 ;;
+    next|prev|save)
+        post "$action"
+        ;;
+    down)
+        # Detached timer; `up` cancels it when the button is released in time.
+        [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null
+        ( sleep "$HOLD_SECONDS"; rm -f "$pidfile"; exec "$bindir/kiwi-btn-save" ) >/dev/null 2>&1 &
+        echo $! > "$pidfile"
+        ;;
+    up)
+        if [ -f "$pidfile" ]; then
+            kill "$(cat "$pidfile")" 2>/dev/null
+            rm -f "$pidfile"
+        fi
+        ;;
+    *)
+        logger -t kiwi-btn "unknown action '$action'"
+        exit 2
+        ;;
 esac
-code=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-    -d '{}' "http://127.0.0.1/slot/$action" || echo 000)
-if [ "$code" != 204 ]; then
-    logger -t kiwi-btn "$action failed (kiwi-web answered $code)"
-    exit 1
-fi

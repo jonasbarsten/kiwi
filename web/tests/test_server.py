@@ -219,12 +219,12 @@ class ServerTest(unittest.TestCase):
     def test_post_requires_origin_from_the_lan(self):
         # 127.0.0.1 is loopback, so emulate a LAN client by sending a foreign Origin.
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
-        conn.request('POST', '/set', body='{"changes": []}', headers={'Content-Type': 'application/json',
-                                                                       'Origin': 'http://evil.example'})
+        conn.request('POST', '/slot/save', body='{}', headers={'Content-Type': 'application/json',
+                                                               'Origin': 'http://evil.example'})
         response = conn.getresponse()
         response.read()
         conn.close()
-        self.assertEqual(response.status, 204, 'loopback requests are exempt from the Origin check')
+        self.assertEqual(response.status, 204, 'loopback slot requests are exempt from the Origin check')
 
     def test_slot_endpoints_from_loopback_without_origin(self):
         self.assertEqual(self.request('POST', '/slot/next', {}, origin=False)[0], 204)
@@ -329,7 +329,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(saved['params'], {'5:piano_vol': 0.3})
         self.assertEqual(saved['name'], 'Warm')
         self.assertEqual(self.read_until(response, 'slot:names')['slot:names'][0], 'Warm')
-        self.assertEqual(self.led(), '1')
+        self.assertEqual(self.led(), '8')
         conn.close()
 
     def test_slot_select_applies_slot_and_resets_leftovers(self):
@@ -370,6 +370,48 @@ class ServerTest(unittest.TestCase):
         self.post('/slot/next')
         self.assertTrue(wait_for(lambda: self.app.store.slot == 1))
         self.assertEqual(self.post('/slot/select', {'slot': 9}), 400)
+        self.assertEqual(self.post('/slot/select', {'slot': True}), 400)
+
+    def test_two_quick_clicks_move_two_slots(self):
+        self.post('/slot/next')
+        self.post('/slot/next')
+        self.assertTrue(wait_for(lambda: self.app.store.slot == 3))
+
+    def test_knob_move_is_saved_by_a_hold_without_a_page(self):
+        # No page open: the link is idle. A knob moves inside mod-host, then the button saves.
+        self.host.params[(5, 'piano_vol')] = 0.3
+        self.app.on_midi({'type': 'cc', 'channel': 0, 'controller': 20, 'value': 38})
+        self.assertEqual(self.request('POST', '/slot/save', {}, origin=False)[0], 204)
+        self.assertTrue(wait_for(lambda: os.path.exists(self.slot_file(1))))
+        self.assertTrue(wait_for(lambda: json.load(open(self.slot_file(1)))['params'].get('5:piano_vol') == 0.3))
+
+    def test_host_restart_reloads_the_slot(self):
+        self.post('/set', {'changes': [{'instance': 5, 'symbol': 'piano_vol', 'value': 0.3}]})
+        self.assertTrue(wait_for(lambda: self.app.store.data['params'] == {'5:piano_vol': 0.3}))
+        # mod-host restarts: the connection drops, kiwi-restore re-applies the saved
+        # slot (nothing saved → baselines), and the units report a new host start.
+        self.host.params[(5, 'piano_vol')] = 0.8
+        self.app.link.units_ready = lambda: 'epoch-2'
+        self.host.drop()
+        conn, response = self.open_events()      # a viewer makes the link reconnect
+        self.assertTrue(wait_for(lambda: self.app.store.data['params'] == {} and not self.app.store.dirty,
+                                 timeout=8), 'RAM must follow what kiwi-restore applied')
+        self.assertFalse(self.read_until(response, 'slot:dirty', False)['slot:dirty'])
+        conn.close()
+
+    def test_rename_targets_the_slot_it_was_typed_for(self):
+        self.assertEqual(self.post('/slot/name', {'name': 'Late', 'slot': 2}), 409)
+        self.assertEqual(self.post('/slot/name', {'name': 'Mine', 'slot': 1}), 204)
+        self.assertTrue(wait_for(lambda: self.app.store.data['name'] == 'Mine'))
+
+    def test_loopback_exemption_covers_only_slot_endpoints(self):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        conn.request('POST', '/reset', body='{}', headers={'Content-Type': 'application/json',
+                                                           'Origin': 'http://evil.example'})
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        self.assertEqual(response.status, 403)
 
     def test_select_discards_unsaved_edits(self):
         self.post('/set', {'changes': [{'instance': 5, 'symbol': 'piano_vol', 'value': 0.3}]})
@@ -423,7 +465,10 @@ class UnitsReadyTest(unittest.TestCase):
         return lambda *args, **kwargs: Result()
 
     def test_both_finished_after_host_start(self):
-        self.assertTrue(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('active', 160))))
+        ready = systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('active', 160)))
+        self.assertTrue(ready)
+        self.assertNotEqual(ready, systemd_units_ready(run=self.fake_run(('active', 200), ('active', 250), ('active', 260))),
+                            'the token must change when kiwi-host restarts')
 
     def test_failed_restore_still_counts_as_finished(self):
         self.assertTrue(systemd_units_ready(run=self.fake_run(('active', 100), ('active', 150), ('failed', 160))))

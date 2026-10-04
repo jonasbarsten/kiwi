@@ -669,22 +669,28 @@ function renderSlots() {
     name.textContent = names[n - 1] || `Preset ${n}`;
     button.append(num, name);
     button.addEventListener('click', () => {
-      if (n !== current && slotState['slot:dirty'] && !confirm('Discard unsaved changes?')) return;
+      if (n === current) return;
+      if (slotState['slot:dirty'] && !confirm('Discard unsaved changes?')) return;
       post('/slot/select', { slot: n });
     });
     box.appendChild(button);
   }
 }
 
-$('prev').addEventListener('click', () => post('/slot/prev'));
-$('next').addEventListener('click', () => post('/slot/next'));
+// ◀/▶ sit next to Save on a phone: unsaved edits get a confirm here too.
+function stepSlot(path) {
+  if (slotState['slot:dirty'] && !confirm('Discard unsaved changes?')) return;
+  post(path);
+}
+$('prev').addEventListener('click', () => stepSlot('/slot/prev'));
+$('next').addEventListener('click', () => stepSlot('/slot/next'));
 $('save').addEventListener('click', () => post('/slot/save'));
 $('slotsbtn').addEventListener('click', () => { $('slots').hidden = !$('slots').hidden; });
 $('slotname').addEventListener('focus', () => { editingName = true; });
 $('slotname').addEventListener('blur', () => { editingName = false; renderSlots(); });
 $('slotname').addEventListener('change', () => {
   const name = $('slotname').value.trim();
-  if (name) post('/slot/name', { name });
+  if (name) post('/slot/name', { name, slot: slotState['slot:current'] });
 });
 $('slotname').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('slotname').blur(); });
 

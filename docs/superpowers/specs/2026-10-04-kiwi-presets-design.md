@@ -132,7 +132,11 @@ params, CCs). With no slot files it does nothing.
 
 ## 10. Deviations found while building (2026-10-04)
 
-- The LED's sysfs interface only flashes a count; "one long blink" on save is one flash.
+- The LED's sysfs interface only flashes a count; a save gives a rapid burst of 8 flashes.
+- `pisound-btn` reports holds only on release (and ≥ 7 s as `HOLD_OTHER`), so the
+  hold-to-save is a 3 s timer started by the `DOWN` script and cancelled by `UP`: the save
+  happens the moment 3 s pass, the LED is dark while holding, and all `HOLD_*` events do
+  nothing (user request, 2026-10-04).
 - Two more periodic writers were found and stopped: `systemd-timesyncd` (clock file every
   minute → `SaveIntervalSec=infinity`) and `cron` (hourly `fake-hwclock`, daily jobs →
   disabled). With those, 90 s of playing/knobs/morph under `kiwi-stress` wrote no file.
