@@ -21,7 +21,7 @@
 - Refuse requests from non-private addresses; POST requires `Origin` to match `Host`.
 - Only parameters present in the generated metadata can be set (routing-locked ones are absent).
 - Local file changes only via Edit/Write (user rule); shell for reading, testing, git, rsync and running `install.sh` on the Pi.
-- Deploy: `rsync -a --delete --exclude backup --exclude legacy --exclude pure-data --exclude Cookbook --exclude SwiftCrossCompilers --exclude .git --exclude .superpowers --exclude plugins/kiwi/build --exclude web/params.json ./ patch@192.168.1.126:kiwi/` then `ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh'`.
+- Deploy: `rsync -a --delete --exclude backup --exclude legacy --exclude pure-data --exclude Cookbook --exclude SwiftCrossCompilers --exclude .git --exclude .superpowers --exclude plugins/kiwi/build --exclude web/params.json ./ patch@kiwi.local:kiwi/` then `ssh patch@kiwi.local 'cd ~/kiwi && ./install.sh'`.
 - Audio budget: after this plan, `host/kiwi-stress 600` with two pages open must report 0.
 - Push to `main` is allowed.
 
@@ -805,7 +805,7 @@ class SecurityTest(unittest.TestCase):
 
     def test_same_origin(self):
         self.assertTrue(same_origin('http://patchbox.local', 'patchbox.local'))
-        self.assertTrue(same_origin('http://192.168.1.126:8080', '192.168.1.126:8080'))
+        self.assertTrue(same_origin('http://kiwi.local:8080', 'kiwi.local:8080'))
         self.assertFalse(same_origin('http://evil.example', 'patchbox.local'))
         self.assertFalse(same_origin(None, 'patchbox.local'))
         self.assertFalse(same_origin('http://patchbox.local', None))
@@ -1134,7 +1134,7 @@ if __name__ == '__main__':
 - [ ] **Step 5: Run the generator on the Pi** (after rsync)
 
 ```bash
-ssh patch@192.168.1.126 'cd ~/kiwi && python3 web/tools/gen_params.py | python3 -c "import json,sys; d=json.load(sys.stdin); [print(p[\"instance\"], p[\"title\"], len(p[\"params\"]), sum(1 for q in p[\"params\"] if q.get(\"curated\"))) for p in d[\"plugins\"]]"'
+ssh patch@kiwi.local 'cd ~/kiwi && python3 web/tools/gen_params.py | python3 -c "import json,sys; d=json.load(sys.stdin); [print(p[\"instance\"], p[\"title\"], len(p[\"params\"]), sum(1 for q in p[\"params\"] if q.get(\"curated\"))) for p in d[\"plugins\"]]"'
 ```
 Expected: lines for 5 Mix 6, 3 Vocoder carrier 1, 6 Reverb 8, 7 Limiter 4, 4 Vocoder 1, 1 Sampler 6, 2 Synth 41, 0 Pianoteq 221 14; and no "curated … not found" lines on stderr. If a curated name is reported missing, find its exact label with `grep -o 'rdfs:label "[^"]*Hammer[^"]*"' "/home/patch/.vst/Pianoteq 8.lv2/dsp.ttl"` and fix `PIANOTEQ_CURATED`.
 
@@ -2391,7 +2391,7 @@ fetch('/params.json')
 
 - [ ] **Step 3: Check the layout locally against a fake host**
 
-Write a throwaway driver in the scratchpad directory (not in the repo) with the Write tool: it adds `web/` to `sys.path`, starts `tests.fakehost.FakeHost` with every port parameter of the real metadata at its default, writes nothing else, and runs `App` + `make_server(('127.0.0.1', 8080), app)` the same way `test_server.py` does (`units_ready=lambda: True`, a sleeping `monitor_command`). The real metadata comes from the Pi: copy the output of `ssh patch@192.168.1.126 'cd ~/kiwi && python3 web/tools/gen_params.py'` into the scratchpad with the Write tool. Open `http://127.0.0.1:8080/` with the browser tools at 360×740, 740×360, 768×1024 and 1280×800. Expected: no horizontal scroll; slider hit areas ≥ 44 px tall; label text ≥ 16 px; sections expand; moving a slider updates its number.
+Write a throwaway driver in the scratchpad directory (not in the repo) with the Write tool: it adds `web/` to `sys.path`, starts `tests.fakehost.FakeHost` with every port parameter of the real metadata at its default, writes nothing else, and runs `App` + `make_server(('127.0.0.1', 8080), app)` the same way `test_server.py` does (`units_ready=lambda: True`, a sleeping `monitor_command`). The real metadata comes from the Pi: copy the output of `ssh patch@kiwi.local 'cd ~/kiwi && python3 web/tools/gen_params.py'` into the scratchpad with the Write tool. Open `http://127.0.0.1:8080/` with the browser tools at 360×740, 740×360, 768×1024 and 1280×800. Expected: no horizontal scroll; slider hit areas ≥ 44 px tall; label text ≥ 16 px; sections expand; moving a slider updates its number.
 
 - [ ] **Step 4: Commit** — `git add web/static/index.html && git commit -m "Web UI: mobile-first kiwi page" && git push`
 
@@ -2466,15 +2466,15 @@ sudo systemctl restart kiwi-web
 
 ```bash
 rsync … (Global Constraints, includes --exclude web/params.json)
-ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh > /tmp/kiwi-install.log 2>&1; echo install=$?; systemctl is-active kiwi-web kiwi-restore; journalctl -u kiwi-restore -b -o cat | tail -2; ps -o pid,cls,ni,rss,cmd -C python3'
-curl -s -o /dev/null -w "%{http_code} %{size_download}\n" http://192.168.1.126/
-curl -s http://192.168.1.126/params.json | python3 -c "import json,sys; print(len(json.load(sys.stdin)['plugins']))"
+ssh patch@kiwi.local 'cd ~/kiwi && ./install.sh > /tmp/kiwi-install.log 2>&1; echo install=$?; systemctl is-active kiwi-web kiwi-restore; journalctl -u kiwi-restore -b -o cat | tail -2; ps -o pid,cls,ni,rss,cmd -C python3'
+curl -s -o /dev/null -w "%{http_code} %{size_download}\n" http://kiwi.local/
+curl -s http://kiwi.local/params.json | python3 -c "import json,sys; print(len(json.load(sys.stdin)['plugins']))"
 ```
 Expected: `install=0`, both `active`, restore says `nothing to restore`, python3 listed with class `IDL` and nice 19, RSS < 30 MB; `200` and a size under 40 KB; `8` plugins.
 
 - [ ] **Step 5: Verify behaviour on device**
 
-1. Open `http://patchbox.local/` (or `http://192.168.1.126/`) on the Mac with the browser tools at 390×844. Move "Piano Volume" → `ssh … 'exec 3<>/dev/tcp/127.0.0.1/5555; printf "param_get 5 piano_vol\0" >&3; IFS= read -r -d "" r <&3; echo $r'` shows the new value.
+1. Open `http://patchbox.local/` (or `http://kiwi.local/`) on the Mac with the browser tools at 390×844. Move "Piano Volume" → `ssh … 'exec 3<>/dev/tcp/127.0.0.1/5555; printf "param_get 5 piano_vol\0" >&3; IFS= read -r -d "" r <&3; echo $r'` shows the new value.
 2. Send CC 20 with `host/kiwi-stress`'s virtual port: `amidi -p hw:4,0 -S "B0 14 20"` (after `sudo modprobe snd-virmidi midi_devs=1` and `aconnect <virmidi>:0 "Midi Through":0`) → the page's Piano Volume moves within ~200 ms and the CC 20 bar shows 32/127.
 3. Wait 6 s → `~/.local/state/kiwi/state.json` contains the changed values. `sudo systemctl restart kiwi-host` → after the patch loads, `journalctl -u kiwi-restore -b -o cat | tail -1` says `restored N value(s), 0 failure(s)` and `param_get 5 piano_vol` matches; the open page reconnects (green dot) without reload.
 4. Reset to patch → values return to the patch, state file gone.
@@ -2498,7 +2498,7 @@ This task produces an answer, not shipped code.
 - [ ] **Step 1: Export presets**
 
 ```bash
-ssh patch@192.168.1.126 'mkdir -p ~/kiwi-data && nice -n 19 ionice -c3 "/home/patch/.vst/Pianoteq 8" --export-lv2-presets ~/kiwi-data/pianoteq-presets --export-presets-filter all; ls ~/kiwi-data/pianoteq-presets | head; ls ~/kiwi-data/pianoteq-presets | wc -l'
+ssh patch@kiwi.local 'mkdir -p ~/kiwi-data && nice -n 19 ionice -c3 "/home/patch/.vst/Pianoteq 8" --export-lv2-presets ~/kiwi-data/pianoteq-presets --export-presets-filter all; ls ~/kiwi-data/pianoteq-presets | head; ls ~/kiwi-data/pianoteq-presets | wc -l'
 ```
 Expected: one or more `.lv2` bundles with presets. Record the layout.
 
@@ -2506,7 +2506,7 @@ Expected: one or more `.lv2` bundles with presets. Record the layout.
 
 With `kiwi-web` stopped (`sudo systemctl stop kiwi-web`) to free the socket:
 ```bash
-ssh patch@192.168.1.126 'exec 3<>/dev/tcp/127.0.0.1/5555; s(){ printf "%s\0" "$1" >&3; IFS= read -r -d "" r <&3; echo "$1 -> $r"; }; s "bundle_add /home/patch/kiwi-data/pianoteq-presets/<bundle>.lv2"; t=$(date +%s%N); s "preset_load 0 <preset uri>"; echo "ms: $(( ($(date +%s%N)-t)/1000000 ))"'
+ssh patch@kiwi.local 'exec 3<>/dev/tcp/127.0.0.1/5555; s(){ printf "%s\0" "$1" >&3; IFS= read -r -d "" r <&3; echo "$1 -> $r"; }; s "bundle_add /home/patch/kiwi-data/pianoteq-presets/<bundle>.lv2"; t=$(date +%s%N); s "preset_load 0 <preset uri>"; echo "ms: $(( ($(date +%s%N)-t)/1000000 ))"'
 ```
 (Fill `<bundle>` and `<preset uri>` from Step 1's manifest.) Run while `host/kiwi-stress 60` plays in a second ssh session.
 

@@ -7,6 +7,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+from kiwi_web.pianoteq_state import version_warning  # noqa: E402
 from kiwi_web.presets import index_presets  # noqa: E402
 
 DEFAULT_ROOT = '/home/patch/kiwi-data/pianoteq-presets'
@@ -18,6 +19,15 @@ def main():
     presets = index_presets(root, out)
     if not presets:
         print(f'gen_presets: no presets found under {root}', file=sys.stderr)
+    else:
+        try:
+            with open(os.path.join(root, '.pianoteq-version')) as f:
+                version = f.read()
+        except OSError:
+            version = ''
+        warning = version_warning(version)
+        if warning:
+            print(f'gen_presets: WARNING: {warning}', file=sys.stderr)
     json.dump({'presets': presets}, sys.stdout)
     sys.stdout.write('\n')
 

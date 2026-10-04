@@ -27,7 +27,7 @@ just fits its CPU budget.
 | Topic | Decision |
 |---|---|
 | Persistence | **Autosave**: every change is stored and restored at boot. |
-| Network | **Both** wired (192.168.1.126) and Wi-Fi (192.168.0.40), port **80**, `http://patchbox.local/`. |
+| Network | **Both** wired and Wi-Fi, port **80**, `http://patchbox.local/`. |
 | Preset prev/next | Steps through **favourites** (starred presets). |
 | Pianoteq parameters | **Curated** set on the main page + an **advanced page** with all 222. |
 

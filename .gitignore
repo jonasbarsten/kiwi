@@ -1,16 +1,19 @@
 .DS_Store
 backup/
 
-# Third-party clones from the previous attempt
+# Your device and Wi-Fi credentials (see kiwi.env.example)
+kiwi.env
+
+# Earlier attempts and third-party clones, kept locally only
+legacy/
 pure-data/
 Cookbook/
 SwiftCrossCompilers/
 
 # Build output
 plugins/kiwi/build/
-legacy/swift_kiwi/.build/
 
-# Web UI
+# Web UI (generated on the Pi by install.sh)
 web/params.json
 web/presets.json
 __pycache__/

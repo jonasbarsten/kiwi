@@ -1,7 +1,8 @@
 import struct
 import unittest
 
-from kiwi_web.pianoteq_state import STATE_KEY, exported_blob, juce_base64, state_string, wrap_state
+from kiwi_web.pianoteq_state import (STATE_KEY, exported_blob, juce_base64, state_string, version_warning,
+                                     wrap_state)
 
 # The first 16 bytes of a state the plugin saved, and how it encoded them
 # (the plugin's string starts "12965.fh4D9K.....R3HA.UJC..D"; 21 characters
@@ -51,6 +52,15 @@ class WrapStateTest(unittest.TestCase):
     def test_state_string_is_the_wrapped_blob(self):
         self.assertEqual(state_string(b'abc'), juce_base64(wrap_state(b'abc')))
         self.assertIn(':StateString', STATE_KEY)
+
+
+class VersionWarningTest(unittest.TestCase):
+    def test_verified_version_is_quiet(self):
+        self.assertIsNone(version_warning('Pianoteq version 8.3.2/20240923 -- http://www.modartt.com/pianoteq\n'))
+
+    def test_other_versions_warn(self):
+        self.assertIn('8.4.0', version_warning('Pianoteq version 8.4.0/20250101'))
+        self.assertIn('unknown', version_warning(''))
 
 
 class ExportedBlobTest(unittest.TestCase):

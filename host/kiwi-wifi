@@ -4,20 +4,31 @@
 # (for internet access while developing). The wired LAN is unaffected either way.
 #
 # Usage: kiwi-wifi hotspot | client [connection] | status
-#   connection defaults to "internett" (a NetworkManager connection name).
+#   connection defaults to CLIENT_WIFI_SSID from kiwi.env (a NetworkManager connection name).
 set -euo pipefail
 
 HOTSPOT=kiwi-hotspot
+env_file="$(cd "$(dirname "$0")/.." && pwd)/kiwi.env"
+if [ -f "$env_file" ]; then
+    # shellcheck source=/dev/null
+    . "$env_file"
+fi
 mode=${1:-status}
-client=${2:-internett}
+client=${2:-${CLIENT_WIFI_SSID:-}}
 
 case "$mode" in
     hotspot)
-        sudo nmcli connection modify "$client" connection.autoconnect no
+        if [ -n "$client" ]; then
+            sudo nmcli connection modify "$client" connection.autoconnect no
+        fi
         sudo nmcli connection modify "$HOTSPOT" connection.autoconnect yes
         sudo nmcli connection up "$HOTSPOT"
         ;;
     client)
+        if [ -z "$client" ]; then
+            echo "kiwi-wifi: no client network: pass its connection name or set CLIENT_WIFI_SSID in kiwi.env" >&2
+            exit 2
+        fi
         sudo nmcli connection modify "$HOTSPOT" connection.autoconnect no
         sudo nmcli connection modify "$client" connection.autoconnect yes
         sudo nmcli connection up "$client"

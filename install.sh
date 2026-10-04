@@ -7,6 +7,29 @@ KIWI_DIR=$(cd "$(dirname "$0")" && pwd)
 RTPMIDID_DEB_VERSION="24.12~1~g66d57"
 
 section() { printf '\n== %s\n' "$1"; }
+fail() { printf 'install.sh: %s\n' "$1" >&2; exit 1; }
+
+section "Preflight"
+# What this installer builds on and cannot provide itself.
+[ "$(id -un)" = "patch" ] || fail "run as user patch (Patchbox OS's user; the patch file uses /home/patch)"
+command -v jackd >/dev/null || fail "jackd not found: this is built for Patchbox OS"
+command -v mod-host >/dev/null && [ -d /var/modep/lv2 ] ||
+    fail "mod-host / MODEP plugins not found: install the MODEP module first (sudo patchbox module activate modep), then re-run"
+pianoteq="$HOME/.vst/Pianoteq 8"
+[ -x "$pianoteq" ] && [ -d "$pianoteq.lv2" ] ||
+    fail "Pianoteq 8 not found: unpack the Linux ARM64 build so that '$pianoteq' and '$pianoteq.lv2' exist"
+pianoteq_version=$("$pianoteq" --version 2>/dev/null | head -1 || true)
+echo "${pianoteq_version:-Pianoteq: version unknown}"
+prefs="$HOME/.config/Modartt/Pianoteq83.prefs"
+if [ ! -f "$prefs" ]; then
+    echo "WARNING: $prefs missing: run Pianoteq once (it writes its preferences), then re-run install.sh"
+elif ! grep -q '<VALUE name="serial"' "$prefs"; then
+    echo "WARNING: Pianoteq is not activated (\"$pianoteq\" --activate SERIAL, or activate it in its window)"
+fi
+case "$pianoteq_version" in
+    *"8.3.2"*) ;;
+    *) echo "WARNING: the LV2 preset conversion was verified with Pianoteq 8.3.2; check that presets change the sound (README: Pianoteq presets)" ;;
+esac
 
 section "Hostname"
 # The device answers as kiwi.local (avahi follows the hostname; rtpmidid announces it).
@@ -60,8 +83,7 @@ make -C "$KIWI_DIR/plugins/kiwi" clean test install
 section "Pianoteq"
 # Symlink so the original bundle in ~/.vst stays where it is.
 mkdir -p "$HOME/.lv2"
-ln -sfn "$HOME/.vst/Pianoteq 8.lv2" "$HOME/.lv2/Pianoteq 8.lv2"
-prefs="$HOME/.config/Modartt/Pianoteq83.prefs"
+ln -sfn "$pianoteq.lv2" "$HOME/.lv2/Pianoteq 8.lv2"
 if [ -f "$prefs" ] && grep -q '<VALUE name="voices" val="' "$prefs"; then
     sed -i 's/<VALUE name="voices" val="[0-9]*"\/>/<VALUE name="voices" val="24"\/>/' "$prefs"
     # Two engine threads spread the attack work of chords across cores.
@@ -69,6 +91,36 @@ if [ -f "$prefs" ] && grep -q '<VALUE name="voices" val="' "$prefs"; then
     grep -E 'name="(voices|multicore|engine_rate)"' "$prefs" || true
 else
     echo "Pianoteq prefs not found or without a voices setting: $prefs (run Pianoteq once, then re-run install.sh)"
+fi
+
+section "Wi-Fi connections"
+# From kiwi.env (git-ignored, see kiwi.env.example): the kiwi hotspot phones join, and
+# optionally a network with internet for development. Existing connections are kept.
+env_file="$KIWI_DIR/kiwi.env"
+if [ -f "$env_file" ]; then
+    # shellcheck source=/dev/null
+    . "$env_file"
+    if ! nmcli -t -f NAME connection show | grep -qx kiwi-hotspot; then
+        if [ -n "${HOTSPOT_PASSWORD:-}" ]; then
+            sudo nmcli connection add type wifi ifname wlan0 con-name kiwi-hotspot autoconnect yes \
+                ssid "${HOTSPOT_SSID:-kiwi}" 802-11-wireless.mode ap 802-11-wireless.band bg \
+                802-11-wireless.channel 6 ipv4.method shared ipv6.method disabled \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp \
+                wifi-sec.psk "$HOTSPOT_PASSWORD" >/dev/null
+            echo "created hotspot ${HOTSPOT_SSID:-kiwi}"
+        else
+            echo "no HOTSPOT_PASSWORD in kiwi.env: hotspot not created"
+        fi
+    fi
+    if [ -n "${CLIENT_WIFI_SSID:-}" ] && ! nmcli -t -f NAME connection show | grep -qx "$CLIENT_WIFI_SSID"; then
+        sudo nmcli connection add type wifi ifname wlan0 con-name "$CLIENT_WIFI_SSID" autoconnect no \
+            ssid "$CLIENT_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${CLIENT_WIFI_PASSWORD:-}" >/dev/null
+        echo "created client connection $CLIENT_WIFI_SSID (switch with host/kiwi-wifi)"
+    fi
+    # Patchbox's own hotspot must not fight ours for the radio.
+    sudo nmcli connection modify pb-hotspot connection.autoconnect no 2>/dev/null || true
+else
+    echo "no kiwi.env: Wi-Fi connections left as they are (see kiwi.env.example)"
 fi
 
 section "Wi-Fi power save"
@@ -155,19 +207,13 @@ section "Pianoteq presets"
 # rewrites them into $presets_dir-lv2, the form the plugin actually restores.
 presets_dir="$HOME/kiwi-data/pianoteq-presets"
 rm -rf "$presets_dir-bundles"   # symlinks an earlier version used
-pianoteq="$HOME/.vst/Pianoteq 8"
-if [ -x "$pianoteq" ]; then
-    version=$("$pianoteq" --version 2>/dev/null | head -1)
-    if [ "$(cat "$presets_dir/.pianoteq-version" 2>/dev/null)" != "$version" ]; then
-        mkdir -p "$presets_dir"
-        (cd /tmp && env -u JACK_PROMISCUOUS_SERVER nice -n 19 ionice -c3 \
-            "$pianoteq" --headless --export-lv2-presets "$presets_dir" --export-presets-filter all > /dev/null 2>&1)
-        printf '%s\n' "$version" > "$presets_dir/.pianoteq-version"
-    fi
-    echo "$(ls -d "$presets_dir"/*.lv2 2>/dev/null | wc -l) preset bundles"
-else
-    echo "Pianoteq standalone not found at $pianoteq: no presets exported"
+if [ "$(cat "$presets_dir/.pianoteq-version" 2>/dev/null)" != "$pianoteq_version" ]; then
+    mkdir -p "$presets_dir"
+    (cd /tmp && env -u JACK_PROMISCUOUS_SERVER nice -n 19 ionice -c3 \
+        "$pianoteq" --headless --export-lv2-presets "$presets_dir" --export-presets-filter all > /dev/null 2>&1)
+    printf '%s\n' "$pianoteq_version" > "$presets_dir/.pianoteq-version"
 fi
+echo "$(ls -d "$presets_dir"/*.lv2 2>/dev/null | wc -l) preset bundles"
 
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"

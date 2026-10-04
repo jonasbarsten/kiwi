@@ -18,6 +18,7 @@ import struct
 
 STATE_KEY = 'https://www.modartt.com/lv2/Pianoteq8:StateString'
 EXPORTED_KEY = 'urn:juce:stateBinary'
+VERIFIED_VERSION = '8.3.2'      # the plugin whose saved state the header below was learned from
 
 _MAGIC = 0xFE1398A0
 _VERSION = 2
@@ -46,6 +47,15 @@ def wrap_state(blob):
 
 def state_string(blob):
     return juce_base64(wrap_state(blob))
+
+
+def version_warning(version_line):
+    """A warning for a Pianoteq version the conversion was not verified with
+    (the line `Pianoteq --version` prints), else None."""
+    if version_line and VERIFIED_VERSION in version_line:
+        return None
+    return (f'Pianoteq preset conversion was verified with {VERIFIED_VERSION}, this is '
+            f'"{(version_line or "unknown").strip()}": check that choosing a preset changes the sound')
 
 
 def exported_blob(ttl):

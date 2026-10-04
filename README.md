@@ -1,32 +1,129 @@
-# Kiwi
+# kiwi 🥝
 
-A headless instrument on a Raspberry Pi 4 + Pisound. MIDI and audio in, stereo out.
-Three modes run at the same time and are blended with knobs:
+**A headless, gig-proof instrument on a Raspberry Pi 4 + Pisound: Pianoteq piano, a
+one-sample sampler and a vocoder, all playing at once, mixed with seven knobs, controlled
+from your phone, and safe to unplug mid-chord.**
 
-- **Piano** — Pianoteq 8.
-- **Sampler** — one audio file (`sampler/sample.wav`), repitched per MIDI key by sfizz.
-- **Vocoder** — the Pisound input (a mic) talks through a carrier that blends a synth
-  voice (amsynth), the piano and the sampler.
+Plug in power and a MIDI keyboard. Thirty seconds later it is a piano. Twist a knob and a
+sample you chose plays under it, repitched across the keyboard. Sing into the mic and the
+vocoder talks through the piano, the sample, or a synth voice. Everything lives in eight
+preset slots you step through with the Pisound button, morph between with a CC, and edit
+from a kiwi-green page on your phone. Nothing is ever written to the SD card while you play.
 
-Each mode has a volume knob and a reverb knob (a send into one shared reverb). A
-seventh knob blends the vocoder carrier. Everything is hosted by a single headless
-`mod-host` that systemd starts at boot.
+```
+                 ┌──────────────┐
+ MIDI (DIN /     │  Pianoteq 8  │──────────────┐
+ USB / RTP) ───┬▶│   (piano)    │              │
+               │ └──────────────┘   ┌──────────▼──────────┐    ┌──────────┐
+               │ ┌──────────────┐   │      kiwi mix       │───▶│ limiter  │─┐
+               ├▶│    sfizz     │──▶│  volume + reverb    │    └──────────┘ │
+               │ │  (sampler)   │   │   send per mode     │    ┌──────────┐ ├──▶ out L/R
+               │ └──────────────┘   │                     │───▶│  reverb  │─┘
+               │ ┌──────────────┐   └──────────▲──────────┘    └──────────┘
+               └▶│   amsynth    │──┐           │
+                 │ (synth voice)│  │  ┌────────┴────────┐
+                 └──────────────┘  └─▶│  kiwi carrier   │   ┌─────────────┐
+ mic ─────────────────────────────────│ synth/piano/    │──▶│ mda TalkBox │
+                                      │ sampler blend   │   │  (vocoder)  │──▶ mix
+                                      └─────────────────┘   └─────────────┘
+```
 
-Design: [`docs/superpowers/specs/2026-09-29-kiwi-design.md`](docs/superpowers/specs/2026-09-29-kiwi-design.md).
-Implementation plan: [`docs/superpowers/plans/2026-09-29-kiwi.md`](docs/superpowers/plans/2026-09-29-kiwi.md).
+One `mod-host` process hosts the whole chain; everything else is systemd, a 1,000-line
+Python server with no dependencies, and one HTML file.
+
+---
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Hardware](#hardware)
+- [Build one](#build-one)
+- [Playing it](#playing-it)
+  - [Knobs](#knobs)
+  - [Presets, the button and the LED](#presets-the-button-and-the-led)
+  - [Morph](#morph)
+  - [The web UI](#the-web-ui)
+  - [CC mapping](#cc-mapping)
+  - [Network](#network)
+- [How it is built](#how-it-is-built)
+  - [The patch](#the-patch)
+  - [Latency and headroom](#latency-and-headroom)
+  - [Pianoteq presets: the key nobody reads](#pianoteq-presets-the-key-nobody-reads)
+  - [Nothing touches the SD card](#nothing-touches-the-sd-card)
+  - [The web service](#the-web-service)
+- [Operations](#operations)
+- [Development](#development)
+- [Caveats and honest limits](#caveats-and-honest-limits)
+- [Credits and license](#credits-and-license)
+
+---
+
+## What it does
+
+- **Three modes at once.** Piano (Pianoteq 8), sampler (one WAV, repitched per key by
+  sfizz), vocoder (the Pisound mic input modulating a carrier blended from a synth voice,
+  the piano and the sampler). Each has a volume and a reverb send into one shared reverb.
+- **Seven knobs, any controller.** Mix, sends and carrier blend on CC 20–26 out of the
+  box; map anything (any Pianoteq parameter, the sampler envelope, panic, next/previous
+  preset, morph) to any CC from the phone in a few taps.
+- **Eight preset slots** in RAM. Button click = next, double click = previous, hold 3 s =
+  save. The box boots into the last slot you chose. A CC morphs between the current slot
+  and the next one, live.
+- **A phone page** at `http://kiwi.local/` over the Pi's own Wi‑Fi hotspot: every
+  parameter, the Pianoteq preset browser with favourites, five switchable reverbs, a MIDI
+  monitor, panic, mapping. Mobile first, zero dependencies, and built so it can never
+  disturb the audio.
+- **Gig-proof.** Boots to the instrument in ~30 s with no desktop, no services you don't
+  need, logs in RAM, and no disk writes while playing — pull the plug whenever you like.
+- **Low latency.** 48 kHz, 128 frames, two periods: about 5 ms out, zero xruns under a
+  worst-case stress test for ten minutes.
 
 ## Hardware
 
-- Raspberry Pi 4 Model B (8 GB), Pisound 2020 v1.1, Patchbox OS (Debian 12 bookworm).
-- Host name `kiwi` (`kiwi.local` over mDNS); SSH `patch@192.168.1.126` on the wired LAN.
-- MIDI from the Pisound DIN input, any USB MIDI device, or RTP-MIDI over the network.
-  All of them are merged automatically; nothing needs patching by hand.
-- A mic for the vocoder needs a preamp in front of the Pisound input (line/instrument level).
+- Raspberry Pi 4 Model B (8 GB used here; 4 GB should do) with [Pisound](https://blokas.io/pisound/).
+- [Patchbox OS](https://blokas.io/patchbox-os/) (Debian 12 bookworm) with the MODEP module.
+- A licensed **Pianoteq 8** for Linux ARM64 (any edition; instruments you don't own play in
+  Pianoteq's demo mode).
+- MIDI from the Pisound DIN input, any USB MIDI device, or RTP‑MIDI over the network — all
+  merged automatically.
+- A mic with a preamp (line/instrument level) into Pisound input 1 for the vocoder.
+- A phone for the page. Optional: a MIDI controller with knobs.
 
-## Controls
+## Build one
 
-Knobs are MIDI CCs. Out of the box they sit on MIDI channel 1 as below; any control, Pianoteq
-parameter or action can be mapped to any CC from the web UI (see *CC mapping* under Web UI).
+Everything after the four prerequisites is one script, safe to re-run.
+
+1. **Flash Patchbox OS**, run its setup, and install the MODEP module once
+   (`sudo patchbox module activate modep`). That brings `mod-host`, amsynth and mda TalkBox;
+   `install.sh` will later deactivate MODEP's own services.
+2. **Install Pianoteq 8** so that `~/.vst/Pianoteq 8` (the standalone) and
+   `~/.vst/Pianoteq 8.lv2` exist, activate it (`"~/.vst/Pianoteq 8" --activate SERIAL` or
+   in its window) and run it once so it writes its preferences.
+3. **Clone this repo on your computer** and create `kiwi.env` from
+   [`kiwi.env.example`](kiwi.env.example): the Pi's address, the hotspot password, and
+   optionally a Wi‑Fi network with internet for development. It is git-ignored.
+4. **Give the Pi internet for the first install** (Ethernet is easiest: the hotspot, once
+   up, has none).
+
+Then:
+
+```bash
+./deploy.sh
+```
+
+which `rsync`s the repo to `patch@<KIWI_HOST>:kiwi/` and runs `install.sh` there. The
+installer first checks what it cannot provide (Patchbox, MODEP, Pianoteq, activation,
+version) and says exactly what is missing; then it installs the plugins, builds sfizz and
+the kiwi LV2 plugins, sets up MIDI routing, JACK, the hotspot, all services, exports and
+converts the Pianoteq presets and generates the page's parameter list. Re-run it after any
+change; it only touches what differs.
+
+Reboot. The LED blinks the slot number, the page is at `http://kiwi.local/` on the `kiwi`
+Wi‑Fi, and you have a piano.
+
+## Playing it
+
+### Knobs
 
 | CC | Control |
 |---|---|
@@ -37,283 +134,221 @@ parameter or action can be mapped to any CC from the web UI (see *CC mapping* un
 | 24 | Vocoder volume |
 | 25 | Vocoder reverb |
 | 26 | Vocoder carrier blend (synth → piano → sampler) |
+| 27 | Morph to the next preset |
 
-## Deploy
+These are only defaults: see [CC mapping](#cc-mapping). Pianoteq, the sampler and the synth
+listen on all channels; the sustain pedal and pitch bend go where you expect.
 
-From this repo on your machine:
+### Presets, the button and the LED
 
-```bash
-rsync -a --delete --exclude backup --exclude legacy --exclude pure-data --exclude Cookbook \
-  --exclude SwiftCrossCompilers --exclude .git --exclude .superpowers --exclude plugins/kiwi/build \
-  --exclude web/params.json --exclude web/presets.json --exclude __pycache__ \
-  ./ patch@192.168.1.126:kiwi/
-ssh patch@192.168.1.126 'cd ~/kiwi && ./install.sh'
-```
-
-`install.sh` is safe to re-run. It builds on Patchbox OS: `mod-host`, amsynth, mda TalkBox
-(from the MODEP module) and `jack.service` come from Patchbox, not from `install.sh`, and
-Pianoteq 8 must already be installed and activated in `~/.vst/Pianoteq 8.lv2`.
-
-## How the patch works
-
-`host/kiwi.patch` is the single place that defines the instrument: which plugins load,
-their settings, every audio/MIDI connection, and the baseline Pianoteq preset. It is plain
-[mod-host](https://github.com/moddevices/mod-host) commands, sent line by line by
-`host/kiwi-load` when `kiwi-patch.service` starts. `@MIDI_IN@` stands for the JACK port
-of the kernel `Midi Through` device, where all MIDI sources are merged.
-
-| Instance | Plugin | Role |
-|---|---|---|
-| 0 | Pianoteq 8 | piano |
-| 1 | sfizz (`sampler/kiwi.sfz`) | sampler |
-| 2 | amsynth | synth voice for the vocoder carrier |
-| 3 | kiwi carrier | blends synth / piano / sampler into the carrier |
-| 4 | mda TalkBox | vocoder: mic on Pisound input 1 (left), carrier on right |
-| 5 | kiwi mix | per-mode volume and post-fader reverb send |
-| 6 | Zita Rev1 (default; switchable, see Web UI) | shared reverb, fully wet |
-| 7 | x42 dpl | limiter at −1 dBFS on the dry bus (the reverb return bypasses it, see below) |
-
-To change the sampler's root key or the envelope ranges, edit `sampler/kiwi.sfz` (the
-envelope itself is set from the web UI). Knob CCs are not in the patch: they live in
-`~/.local/state/kiwi/ccmap.json` and are applied by `kiwi-restore` at boot.
-
-Pianoteq engine settings are its global preferences (`~/.config/Modartt/Pianoteq83.prefs`):
-`install.sh` caps polyphony at 24 voices and uses two engine threads (`multicore=2`). The
-internal engine rate (24 kHz on this Pi) is left as Pianoteq has it; `install.sh` only
-prints it. The plugin runs its default preset.
-
-## Latency and performance
-
-JACK runs at 48 kHz, 128 frames, 2 periods (about 5.3 ms output latency); `install.sh`
-sets this through `patchbox jack config`. Findings from tuning on this Pi:
-
-- **Dragonfly Room is not usable at 128 frames here**: whenever signal reaches it, it
-  overruns its deadline every 32768 frames (a steady glitch at ~88 bpm). Measured under
-  `kiwi-stress` (45 s, average JACK DSP load; the instrument without a reverb sits at ~50 %):
-  MDA Ambience 50.5 % and Guitarix Reverb 52.1 % and Calf Reverb 52.5 % and Zita Rev1 53.7 %
-  and Dragonfly Plate 56.6 % all with 0 xruns; Dragonfly Hall 60 % with a few; Aether 66 %
-  and ZamVerb 60 % with many. The first five are the choices offered in the web UI;
-  Zita Rev1 is the default in `kiwi.patch`.
-- `mod-host`'s `bypass` does not stop every plugin's processing, so bypassing is not a
-  reliable way to find which plugin is expensive; disconnecting its input is.
-- Pianoteq with `multicore=2` absorbs dense chords with the sustain pedal held;
-  with `multicore=1` the same chords overran.
-- `host/kiwi-stress [seconds]` plays a worst case (sustain held, alternating 8-note
-  chords every 0.4 s) through a temporary virtual MIDI port and counts JACK errors.
-  At 128 frames: 32 voices → about 6 short overruns in 5 minutes; 24 voices → 1–2 per
-  2 minutes; 24 voices with the reverb running in parallel to the limiter → none.
-- Every plugin in `mod-host` is its own JACK client, so each step in a serial chain
-  costs time. The reverb return goes straight to the outputs instead of through the
-  limiter, which keeps the chain one client shorter.
-
-## Web UI
-
-Open **http://kiwi.local/** (or `http://192.168.1.126/` on the wired LAN, or `http://10.42.0.1/`
-on the kiwi hotspot) on a phone or computer. It is mobile first; on a phone, "Add to Home Screen" makes it
-a full-screen app.
-
-- **Mix**: volume and reverb per mode, and the vocoder carrier blend, with their CC numbers.
-  Moving a physical knob moves the slider. The current Pianoteq preset sits under the piano
-  volume with ◀ ▶. A control whose value differs from `host/kiwi.patch` shows ↺: tap it to go
-  back.
-- **Header banner**: when mod-host is starting or away, or the page cannot reach the Pi, a
-  banner says so (the dot alone is easy to miss).
-- **MIDI in**: a kiwi slice whose seeds light up per pitch class, the last event, and a bar
-  per mapped CC named after what it drives. Header: audio host status, JACK DSP load, CPU
-  temperature, MIDI activity, **Map** and **Panic**.
-- **Panic**: sends All Sound Off and All Notes Off on all 16 channels into Midi Through, so
-  every instrument hears it. Mappable to a controller button.
-- **CC mapping**: **Map** enters map mode: controls stop moving and become targets; tap one
-  (or ◀ ▶ Save, the morph slider or Panic), then move the knob or press the button on your
-  controller — the next control change, on any channel, binds to it. Tap anywhere else, or
-  Map again, to finish. Mapped controls show `CC n` (and the channel if not 1); in map mode
-  a ✕ removes a mapping. One control has one CC; one CC may drive any number of controls.
-  Mix, carrier, synth, limiter and reverb controls are mapped inside mod-host (audio-thread,
-  no added latency; the reverb's are re-applied when the reverb is swapped). Pianoteq
-  parameters and the sampler envelope have no mod-host ports, so the service forwards those
-  CCs itself (the same path as the page's sliders) and keeps its mod-host link open while such
-  mappings exist. The map is global, not part of a slot: `~/.local/state/kiwi/ccmap.json`,
-  written only when a mapping changes; with no file the defaults are CC 20–26 for the knobs
-  and CC 27 for morph.
-- **Reverb**: a picker swaps the shared reverb live (Zita Rev1, Calf Reverb, MDA Ambience,
-  Guitarix Reverb, Dragonfly Plate: `web/kiwi_web/reverbs.py`). The tail cuts for a moment;
-  the dry sound is untouched. Each reverb keeps its own settings; the choice is part of the
-  preset. Reset returns to the `kiwi.patch` reverb.
-- **Sampler envelope**: attack, decay, sustain and release live in `sampler/kiwi.sfz` as
-  CC-driven opcodes (CC 102–105). The page sends those CCs through the kernel's virtual
-  MIDI device (`snd-virmidi`, routed into Midi Through), so they reach sfizz like any
-  knob; the values are part of the preset.
-- **Sections**: limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
-  (curated) and Pianoteq (all parameters). A closed card's summary line carries its status
-  (reverb name, Pianoteq preset, sampler envelope, limiter threshold). On a wide screen the
-  cards in a grid row open and close together, and the browser remembers which sections were
-  open. Routing-critical settings are not offered.
-  Pianoteq values show "–" until set from the page (mod-host cannot read them back).
-  Sliders apply while you drag: Pianoteq and reverb changes at most every 150 ms (they
-  recompute inside the audio thread), everything else every 50 ms.
-- **Pianoteq presets**: the Pianoteq section starts with the current preset, ◀ ▶ and a
-  browser (☰) with a family dropdown, search and ★ stars. ◀ ▶ step through the starred
-  presets (or, with none starred, the current family). The chosen preset is part of the
-  slot and comes back at boot; a slot's Pianoteq parameter tweaks apply on top of its
-  preset. Favourites are global and are written only when you star or unstar (the one
-  deliberate write besides save/select). Presets of instruments you do not own play in
-  Pianoteq's demo mode. `install.sh` exports all presets from the Pianoteq standalone into
-  `~/kiwi-data/pianoteq-presets` (re-exported when Pianoteq is updated), rewrites them into
-  `~/kiwi-data/pianoteq-presets-lv2` and lists them in `web/presets.json`. The rewrite is
-  not cosmetic: Pianoteq 8.3.2 exports the state under `urn:juce:stateBinary`, a key its
-  own LV2 plugin never reads, so every host "loads" such a preset and nothing changes. The
-  plugin restores `Pianoteq8:StateString`, a JUCE-base64 string of the same blob behind a
-  28-byte header (`web/kiwi_web/pianoteq_state.py`; the header's two constant words were
-  learned from a state the plugin saved, so a future Pianoteq may need them re-learned).
-  The rewritten bundles have ASCII, space-free paths, which is also what mod-host's
-  `bundle_add` needs. `kiwi.patch` loads *Ant. Petrof Warm* as the baseline: that is what a
-  slot without a preset means.
-- **Presets**: see the next section. The slot sheet (☰) shows each slot's Pianoteq preset and
-  reverb.
-- Only private-network addresses are served, and changes are only accepted from the page
-  itself (or from the Pi itself, for the button). No login.
-
-It is built not to disturb audio: `kiwi-web.service` runs at idle CPU and I/O priority with a
-64 MB memory cap, connects to mod-host only while a page is open or a change is pending
-(and only after `kiwi-patch` and `kiwi-restore` finished), and disconnects 10 s after the
-last need. A hidden browser tab disconnects by itself. Its MIDI monitor (`aseqdump`, idle
-priority) runs permanently so mapped CCs and the button work with no page open.
-The parameter list (`web/params.json`) is generated by `install.sh` from the installed plugins.
-
-## Presets
-
-Everything you change lives in RAM, in one of **eight preset slots**. Nothing is written to
-the SD card while you play, so the plug can be pulled at any moment. Verified: 90 s of playing,
-knob turning and morphing under `kiwi-stress` wrote no file.
+Everything you change lives in RAM, in one of **eight slots**.
 
 | Action | Pisound button | Page |
 |---|---|---|
-| Next preset | single click | ▶ |
+| Next preset | click | ▶ |
 | Previous preset | double click | ◀ |
-| Save RAM into the current slot | hold 3 s (saves the moment 3 s pass; no need to release) | **Save** (orange when there are unsaved changes) |
-| Pick any slot, rename | — | ☰ sheet; the name field (saved with the slot) |
+| Save RAM into the current slot | hold 3 s (saves the moment 3 s pass) | **Save** (amber when there is something to save) |
+| Pick any slot, rename it | — | ☰ sheet; the name field |
 
-The LED stays dark while holding, flashes the slot number (0.3 s apart) on a selection and
-gives a rapid burst of 8 flashes (0.1 s apart) when a save happens. (The
-Pisound's LED file takes a flash *duration*, one flash per write, so the patterns are paced
-by `kiwi-web`.) (`pisound-btn` only reports holds on release, so the
-hold-to-save timer lives in the `DOWN`/`UP` scripts, `host/kiwi-btn`.) The box boots into the
-**last selected** slot: selecting writes the one-line `~/.local/state/kiwi/current`, the only
-write outside saving; slots are `~/.local/state/kiwi/presets/<n>.json`. Selecting a slot
-discards unsaved RAM edits and resets anything the previous slot had changed, so sounds do not
-bleed between slots. A `kiwi-host` restart or reboot reloads the slot (`kiwi-restore`).
+The LED stays dark while you hold, flashes the slot number (0.3 s apart) on a selection, and
+gives a rapid burst of eight flashes when a save lands. Selecting a slot discards unsaved
+edits and resets whatever the previous slot had changed, so sounds never bleed between
+slots. The box boots into the **last selected** slot; a `kiwi-host` restart reloads it.
 
-**Morph**: CC 27 by default (remappable; or the page's morph slider) crossfades between the current slot (0) and the
-next one (127) for continuous parameters: volumes, sends, blend, limiter, vocoder quality,
-sampler ports and envelope, the synth's float parameters, and the current reverb's settings
-when both slots use that reverb. Toggles, enums, integers, the reverb choice and Pianoteq are
-not morphed. Morphing only changes RAM; save to keep it. Selecting a slot re-anchors the
-morph, and CC knobs are absolute, so the next move jumps to the knob's position.
+Each slot holds: the mix, every plugin parameter you touched, the reverb choice and its
+settings, the sampler envelope, and the Pianoteq preset (with your parameter tweaks on top).
 
-The pre-preset autosave file (`state.json`) is migrated into slot 1 once.
+### Morph
 
-Web UI tests (macOS or the Pi): `python3 -m unittest discover -s web/tests -t web`.
+CC 27 (or the page's morph slider) crossfades between the current slot (0) and the next one
+(127) for every continuous parameter: volumes, sends, blend, limiter, vocoder quality,
+sampler ports and envelope, the synth's float parameters, and the reverb's settings when
+both slots use the same reverb. Toggles, enums, the reverb choice and the Pianoteq preset
+are not morphed. Morphing is RAM only; save to keep where you landed.
+
+### The web UI
+
+Open **http://kiwi.local/** on the `kiwi` Wi‑Fi (or the Pi's wired address). On a phone,
+"Add to Home Screen" makes it a full-screen app.
+
+- **Mix** — volume and reverb per mode, the carrier blend, the current Pianoteq preset with
+  ◀ ▶. A control that differs from the patch shows ↺; tap it to go back. Moving a knob
+  moves the slider.
+- **Header** — host state, JACK DSP load, CPU temperature, MIDI activity, **Map**, **Panic**.
+  A banner appears when the audio host is starting, down, or unreachable.
+- **Panic** — All Sound Off + All Notes Off on all 16 channels, into every instrument.
+- **MIDI in** — a kiwi slice whose seeds light per pitch class, the last event, and a level
+  bar per mapped CC named after what it drives.
+- **Reverb** — swap the shared reverb live between Zita Rev1 (default), Calf Reverb, MDA
+  Ambience, Guitarix Reverb and Dragonfly Plate; each keeps its own settings.
+- **Sampler** — attack, decay, sustain and release (CC-driven opcodes in `sampler/kiwi.sfz`,
+  sent through a virtual MIDI device so sfizz sees them like any knob).
+- **Pianoteq** — the current preset, ◀ ▶ through your ★ favourites (or the family), a
+  browser with family filter and search, a curated parameter set and a second card with all
+  of them. Presets are part of the slot.
+- **Sections** carry their status on the summary line when closed; on a wide screen the
+  cards in a row open together; the browser remembers what you had open.
+- Sliders apply while you drag (every 50 ms; 150 ms for Pianoteq and the reverb, which
+  recompute in the audio thread). One request in flight at a time, so values never arrive
+  out of order.
+- Only private-network addresses are served, and changes are only accepted from the page
+  itself. No login: whoever is on your hotspot is in the band.
+
+### CC mapping
+
+Tap **Map**. The page turns amber, controls freeze and become targets. Tap a control (or
+◀ ▶, Save, the morph slider, Panic), then move a knob or press a button on your
+controller: the next control change, on any channel, binds to it. Tap empty space or Map
+again to finish. Mapped controls show `CC n`; in map mode a ✕ removes a mapping.
+
+- One control has one CC; one CC may drive **any number** of controls.
+- Mix, carrier, synth, limiter and reverb controls are bound *inside mod-host*
+  (`midi_map`): audio-thread, no added latency. Pianoteq parameters and the sampler
+  envelope have no mod-host ports, so the service forwards those CCs itself (the same path
+  the sliders use, a few tens of milliseconds).
+- The map is global, not part of a slot: `~/.local/state/kiwi/ccmap.json`, written only when
+  a mapping changes, applied at boot. Delete the file to get the defaults back.
+
+### Network
+
+- **Wi‑Fi hotspot (default)** — SSID from `kiwi.env` (`kiwi`), WPA2. Phones join it and open
+  `http://kiwi.local/` or `http://10.42.0.1/`. No internet in this mode.
+- **Wired LAN** — SSH, the page and RTP‑MIDI; never the default route.
+- **Wi‑Fi client (development)** — `host/kiwi-wifi client` joins the network named in
+  `kiwi.env` for package installs; `host/kiwi-wifi hotspot` goes back. Do this over the
+  wire: the radio does one or the other.
+
+RTP‑MIDI: the Pi advertises itself as `kiwi`; it receives sessions but does not export its
+own ports back, so you never get MIDI loops.
+
+## How it is built
+
+### The patch
+
+[`host/kiwi.patch`](host/kiwi.patch) is the whole instrument in one readable file: plain
+[mod-host](https://github.com/moddevices/mod-host) commands, sent line by line at boot by
+`host/kiwi-load`.
+
+| Instance | Plugin | Role |
+|---|---|---|
+| 0 | Pianoteq 8 | piano; loads *Ant. Petrof Warm* as the baseline preset |
+| 1 | sfizz (`sampler/kiwi.sfz`) | sampler, one region spanning the keyboard |
+| 2 | amsynth | synth voice for the vocoder carrier |
+| 3 | **kiwi carrier** | blends synth / piano / sampler into the carrier (custom LV2) |
+| 4 | mda TalkBox | vocoder: mic on input 1, carrier on the right input |
+| 5 | **kiwi mix** | per-mode volume and post-fader reverb send (custom LV2) |
+| 6 | Zita Rev1 (switchable) | shared reverb, fully wet, returned straight to the outputs |
+| 7 | x42 dpl | limiter at −1 dBFS on the dry bus |
+
+All MIDI sources are merged in the kernel's `Midi Through` port by amidiminder rules, so a
+USB controller plugged in on stage just works. The two custom plugins are ~200 lines of C
+each with unit tests that run on macOS and the Pi.
+
+### Latency and headroom
+
+JACK runs at 48 kHz, 128 frames, 2 periods (≈5.3 ms output latency). What it took to get
+there with zero xruns, measured with `host/kiwi-stress` (sustain held, alternating 8-note
+chords every 0.4 s, all modes up):
+
+- Pianoteq: 24 voices, two engine threads (`multicore=2`); with one thread the same chords
+  overran.
+- The reverb return bypasses the limiter: every plugin in mod-host is its own JACK client,
+  and one client fewer in the longest chain was the difference between occasional and zero
+  overruns.
+- Not every reverb survives 128 frames on a Pi 4. Dragonfly Room overran every 32768 frames
+  (a metronomic glitch at ~88 bpm); Aether and ZamVerb were simply too heavy. The five on
+  offer all run at 50–57 % DSP load with none.
+- `mod-host`'s bypass does not stop a plugin's processing; disconnect its input to measure.
+
+### Pianoteq presets: the key nobody reads
+
+Pianoteq can export its presets as LV2 preset bundles (`--export-lv2-presets`), and every
+LV2 host loads them without complaint — and nothing changes. The export stores the state
+under `urn:juce:stateBinary`; the 8.3.2 plugin only ever reads
+`https://www.modartt.com/lv2/Pianoteq8:StateString`, a JUCE base64 string of the same
+blob behind a 28-byte header. `install.sh` therefore rewrites every exported preset into
+that form ([`web/kiwi_web/pianoteq_state.py`](web/kiwi_web/pianoteq_state.py)); the two
+constant words in the header were learned from a state the plugin saved itself, verified
+with 8.3.2, and the installer warns on any other version. The rewritten bundles also get
+ASCII, space-free paths, which is what mod-host's `bundle_add` needs anyway. 654 presets,
+all loading.
+
+### Nothing touches the SD card
+
+While playing, nothing writes to the card. Edits live in RAM; selecting a slot writes one
+line (`~/.local/state/kiwi/current`); saving writes one small JSON file; starring a preset or
+changing a mapping writes one file. The journal lives in RAM (32 MB cap), cron and every
+maintenance timer are off, `timesyncd` no longer saves its clock every minute, and the
+desktop, VNC, Bluetooth, CUPS, PipeWire/PulseAudio, telemetry and MODEP's UI are disabled or
+masked (never uninstalled; the list and how to undo it are in `install.sh`). Verified with
+`find -newer` under the stress test: no file changed.
+
+### The web service
+
+`kiwi-web` is Python 3 standard library only, one HTML file, Server‑Sent Events. It runs at
+idle CPU and I/O priority with a 64 MB memory cap, talks to mod-host only while a page is
+open or a change is pending (and only after the patch loader and the preset restore have
+finished, since mod-host serves one client at a time), and lets go 10 s after the last
+need. Its MIDI monitor (`aseqdump`) runs permanently so mapped CCs and the button work with
+no page open. The parameter list (`web/params.json`) is generated at install time from the
+installed plugins' `lv2info`, so the page never guesses a range.
 
 ## Operations
 
 ```bash
-systemctl status kiwi-host kiwi-patch     # is the instrument running?
-journalctl -u kiwi-patch -b               # what the patch loader did this boot
-journalctl -u kiwi-restore -b             # which preset slot was applied at boot
-journalctl -t kiwi-btn -b                 # button presses that failed to reach kiwi-web
-~/kiwi/host/kiwi-check                    # full health check
+systemctl status kiwi-host kiwi-patch kiwi-web   # is the instrument running?
+~/kiwi/host/kiwi-check                            # full health check
+~/kiwi/host/kiwi-stress 120                       # 2 min worst case; prints xruns and who was late
+~/kiwi/host/kiwi-log                              # save this boot's logs to ~/kiwi-logs (one deliberate write)
+~/kiwi/host/kiwi-log xruns                        # just the xrun summary
+journalctl -u kiwi-patch -b                       # what the patch loader did this boot
+journalctl -u kiwi-restore -b                     # which slot and mappings were applied
 ```
-
-The system journal lives in RAM (`system/journald-kiwi.conf`: 32 MB cap, gone at reboot); the
-persistent journal under `/var/log/journal` was removed by `install.sh`. To keep a copy of a
-session's logs, run `~/kiwi/host/kiwi-log` **after** playing: it writes this boot's audio,
-web and button logs to `~/kiwi-logs/<date>.log` (the one deliberate SD write) and prints an
-xrun summary; `kiwi-log xruns` prints only the summary, `kiwi-log follow` watches live.
-`kiwi-stress` now also lists when its xruns happened and which plugins were late.
-
-## What `install.sh` turns off
-
-The Pi boots to a console (`multi-user.target`), not a desktop. Nothing is uninstalled:
-
-- The Patchbox MODEP module is deactivated (`patchbox module deactivate`); otherwise
-  `patchbox-init` re-enables MODEP's services on every boot.
-- Disabled: `lightdm`, `wayvnc-control`, `patchbox-vnc.target`, MODEP services,
-  `touchosc2midi`, `cups`, `cups-browsed`, `bluetooth`, `hciuart`, `ModemManager`,
-  `blokas-telemetry.target`, `wifi-hotspot`, `glamor-test`, `rp1-test`, `pisound-ctl`
-  (Bluetooth link to the Pisound phone app), `triggerhappy`, and the `apt-daily`,
-  `man-db`, `dpkg-db-backup`, `e2scrub_all` and `fstrim` timers (so no maintenance job
-  fires mid-performance; run `sudo fstrim -av` by hand now and then), and `cron` (hourly
-  `fake-hwclock` and daily apt/dpkg/logrotate/man-db jobs). `systemd-timesyncd` no longer
-  saves its clock file every minute (`system/timesyncd-kiwi.conf`). Together with the
-  journal in RAM, nothing writes to the card while playing.
-- The Pisound button runs `system/pisound.conf` (presets, see above) instead of Patchbox's
-  defaults (which toggled the hotspot on a 3 s hold and shut down on 5 s).
-- Masked: `packagekit`, `rtkit-daemon` (D-Bus activated), and for all users FluidSynth,
-  PipeWire, PipeWire-Pulse, WirePlumber and PulseAudio.
-- rtpmidid runs with `system/rtpmidid.ini` (via a systemd drop-in): it receives network
-  MIDI but does not export the Pi's own MIDI ports back to the network.
-
-To undo: `sudo systemctl set-default graphical.target`, `sudo patchbox module activate modep`,
-`sudo systemctl enable <unit>` for anything wanted back, and
-`sudo systemctl --global unmask fluidsynth.service pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service`.
-
-## Network
-
-- **Wired LAN**: `192.168.1.126` (SSH, web UI, RTP-MIDI). It never takes the default route
-  (`ipv4.never-default` on "Wired connection 1"); that LAN has no internet.
-- **Wi-Fi hotspot (default)**: SSID **kiwi**, WPA2. Phones join it directly and open
-  `http://kiwi.local/` or `http://10.42.0.1/`. NetworkManager connection `kiwi-hotspot`
-  (`ipv4.method shared`: the Pi hands out `10.42.0.x` addresses). In this mode the Pi has no
-  internet.
-- **Wi-Fi client (for development)**: joins an existing network ("internett") for internet,
-  e.g. to install packages. The radio does one or the other.
-
-Switch with `host/kiwi-wifi`:
-
-```bash
-~/kiwi/host/kiwi-wifi client      # join "internett" (internet for installs); persists across reboots
-~/kiwi/host/kiwi-wifi hotspot     # back to the kiwi hotspot (the default)
-~/kiwi/host/kiwi-wifi status
-```
-
-Do this over the wired LAN: switching drops whatever is connected over Wi-Fi.
-`install.sh` only needs internet when a package or the sfizz build is missing.
-
-These connections were created by hand (the passwords are not in the repo), e.g.:
-
-```bash
-sudo nmcli connection add type wifi ifname wlan0 con-name kiwi-hotspot autoconnect no ssid kiwi \
-  802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 6 \
-  802-11-wireless.powersave 2 ipv4.method shared ipv6.method disabled \
-  wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp \
-  wifi-sec.psk '<password>'
-```
-
-The Patchbox hotspot (`pb-hotspot`) is left in place with autoconnect off.
 
 ## Development
 
-The custom plugins' DSP core is plain C with unit tests that run on macOS and on the Pi:
-
 ```bash
-make -C plugins/kiwi test
+python3 -m unittest discover -s web/tests -t web   # 147 tests, ~30 s, no Pi needed
+make -C plugins/kiwi test                          # DSP unit tests for the custom plugins
+./deploy.sh                                        # rsync + install.sh on the Pi
+./deploy.sh --no-install                           # rsync only
 ```
 
-## Repository layout
-
 ```
-install.sh              idempotent installer, run on the Pi
-host/                   mod-host patch file, loader, health check
-plugins/kiwi/           custom LV2 plugins (kiwi mix, kiwi carrier) with tests
-sampler/                SFZ file and the sample
-web/                    web UI: server (kiwi_web/), page (static/), metadata generator, tests
-system/                 systemd units, MIDI routing rules, sfizz build script
-docs/superpowers/       design spec and implementation plan
-legacy/                 the previous Pure Data / MODEP attempt, kept for reference
-backup/                 local only (git-ignored): Pianoteq preferences and bundle
+install.sh        idempotent installer, run on the Pi (preflight, packages, services, presets)
+deploy.sh         rsync the repo to the Pi and run install.sh
+host/             kiwi.patch, the loader, button scripts, kiwi-check / -stress / -log / -wifi
+plugins/kiwi/     custom LV2 plugins (kiwi mix, kiwi carrier) with tests
+sampler/          the SFZ instrument and its sample
+web/              kiwi_web/ server package, static/index.html, tools/ generators, tests/
+system/           systemd units, journald/timesyncd drop-ins, MIDI rules, sfizz build script
+docs/superpowers/ design specs and implementation plans, as the thing was built
 ```
 
-## Legacy
+The web server is deliberately framework-free: it must start in a second on a Pi, use no
+CPU while idle, and never need a package update on tour.
 
-The previous attempt (Pure Data patch hosting Pianoteq, MODEP for the vocoder) lives in
-`legacy/`; its notes are in `legacy/README-old.md`.
+## Caveats and honest limits
+
+- Built on **Patchbox OS + Pisound**. Another audio HAT means editing `/etc/jackdrc`, the
+  port names in `kiwi.patch`, and dropping the button/LED bits.
+- **Pianoteq 8.3.2** is what the preset conversion was verified with. A newer Pianoteq may
+  change the state header; the installer warns, and the procedure for re-learning it is in
+  `pianoteq_state.py`'s docstring (save a state from a fresh instance, read the header).
+- No RT kernel: Patchbox's `PREEMPT` kernel with JACK at `-P 95` was enough for zero xruns
+  here, but every system is its own.
+- Loading a Pianoteq preset reloads the instrument: the piano goes quiet for about a second.
+  That is Pianoteq, not kiwi.
+- The page has no login. The hotspot password is the access control.
+
+## Credits and license
+
+Built on the shoulders of [mod-host](https://github.com/moddevices/mod-host),
+[sfizz](https://sfz.tools/sfizz/), [amsynth](https://amsynth.github.io/),
+[mda-lv2](https://drobilla.net/software/mda-lv2.html), [Guitarix](https://guitarix.org/)
+(Zita Rev1), [Calf](https://calf-studio-gear.org/), [Dragonfly Reverb](https://michaelwillis.github.io/dragonfly-reverb/),
+[x42 plugins](https://x42-plugins.com/), [rtpmidid](https://github.com/davidmoreno/rtpmidid),
+[amidiminder](https://github.com/mzero/amidiminder), [Patchbox OS and Pisound](https://blokas.io/) by Blokas,
+and [Pianoteq](https://www.modartt.com/pianoteq) by Modartt (not included; bring your own licence).
+
+MIT — see [LICENSE](LICENSE).

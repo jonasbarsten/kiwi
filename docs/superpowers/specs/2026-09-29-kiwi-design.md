@@ -41,7 +41,7 @@ Patchbox module active). Reliability is the primary driver of this design.
 - Raspberry Pi 4 Model B Rev 1.5, 8 GB RAM, Pisound 2020 v1.1.
 - Patchbox OS on Debian 12 (bookworm), kernel `6.6.51+rpt-rpi-v8` (PREEMPT,
   not PREEMPT_RT). CPU governor already `performance`. No throttling observed.
-- Host: `patch@192.168.1.126`, SSH key auth.
+- Host: `patch@kiwi.local`, SSH key auth.
 - `jack.service` runs `jackd -R -P 95 -d alsa -d hw:pisound -r 48000 -p 128 -n 2
   -X seq`, as user `jack`, with `JACK_PROMISCUOUS_SERVER=jack`.
 - Pianoteq 8.3.2 installed as LV2 at `~/.vst/Pianoteq 8.lv2`; activation and
