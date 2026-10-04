@@ -104,8 +104,12 @@ class StateStore:
         return _clean(loaded, f'Preset {slot}')
 
     def names(self):
-        return [self.data['name'] if n == self.slot else self.read_slot(n)['name']
-                for n in range(1, self.slots + 1)]
+        return [s['name'] for s in self.summaries()]
+
+    def summaries(self):
+        """Name, Pianoteq preset and reverb of every slot (the current one from RAM)."""
+        documents = [self.data if n == self.slot else self.read_slot(n) for n in range(1, self.slots + 1)]
+        return [{'name': d['name'], 'preset': d.get('preset'), 'reverb': d.get('reverb')} for d in documents]
 
     def _migrate(self):
         """The pre-preset autosave file becomes slot 1, once."""

@@ -113,10 +113,14 @@ on the kiwi hotspot) on a phone or computer. It is mobile first; on a phone, "Ad
 a full-screen app.
 
 - **Mix**: volume and reverb per mode, and the vocoder carrier blend, with their CC numbers.
-  Moving a physical knob moves the slider.
+  Moving a physical knob moves the slider. The current Pianoteq preset sits under the piano
+  volume with ◀ ▶. A control whose value differs from `host/kiwi.patch` shows ↺: tap it to go
+  back.
+- **Header banner**: when mod-host is starting or away, or the page cannot reach the Pi, a
+  banner says so (the dot alone is easy to miss).
 - **MIDI in**: a kiwi slice whose seeds light up per pitch class, the last event, and a bar
-  per mapped CC. Header: audio host status, JACK DSP load, CPU temperature, MIDI activity,
-  **Map** and **Panic**.
+  per mapped CC named after what it drives. Header: audio host status, JACK DSP load, CPU
+  temperature, MIDI activity, **Map** and **Panic**.
 - **Panic**: sends All Sound Off and All Notes Off on all 16 channels into Midi Through, so
   every instrument hears it. Mappable to a controller button.
 - **CC mapping**: **Map** enters map mode: controls stop moving and become targets; tap one
@@ -140,8 +144,10 @@ a full-screen app.
   MIDI device (`snd-virmidi`, routed into Midi Through), so they reach sfizz like any
   knob; the values are part of the preset.
 - **Sections**: limiter, vocoder, sampler, synth (all amsynth controls), Pianoteq
-  (curated) and Pianoteq (all parameters). On a wide screen the cards in a grid row open
-  and close together. Routing-critical settings are not offered.
+  (curated) and Pianoteq (all parameters). A closed card's summary line carries its status
+  (reverb name, Pianoteq preset, sampler envelope, limiter threshold). On a wide screen the
+  cards in a grid row open and close together, and the browser remembers which sections were
+  open. Routing-critical settings are not offered.
   Pianoteq values show "–" until set from the page (mod-host cannot read them back).
   Sliders apply while you drag: Pianoteq and reverb changes at most every 150 ms (they
   recompute inside the audio thread), everything else every 50 ms.
@@ -162,7 +168,8 @@ a full-screen app.
   The rewritten bundles have ASCII, space-free paths, which is also what mod-host's
   `bundle_add` needs. `kiwi.patch` loads *Ant. Petrof Warm* as the baseline: that is what a
   slot without a preset means.
-- **Presets**: see the next section. A dot marks values that differ from `host/kiwi.patch`.
+- **Presets**: see the next section. The slot sheet (☰) shows each slot's Pianoteq preset and
+  reverb.
 - Only private-network addresses are served, and changes are only accepted from the page
   itself (or from the Pi itself, for the button). No login.
 

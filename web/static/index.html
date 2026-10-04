@@ -55,6 +55,25 @@ body.mapping .row.mapped output { display: none; }
 header { flex-wrap: wrap; }
 #maphint { display: none; flex-basis: 100%; font-size: 15px; color: var(--seed); padding: 6px 0 2px; }
 body.mapping #maphint { display: block; }
+/* The host banner: the dot is easy to miss when mod-host restarts or the Wi-Fi drops. */
+#hostbanner { display: none; flex-basis: 100%; font-size: 15px; padding: 8px 12px; border-radius: 10px; background: var(--bad); color: var(--core); }
+#hostbanner.starting { background: var(--warn); color: var(--seed); }
+#hostbanner.show { display: block; }
+/* Collapsed sections carry their status (preset, reverb, envelope) on the summary line. */
+details.card > summary .sum {
+  margin-left: 10px; flex: 1; min-width: 0; font-weight: 400; font-size: 14px; letter-spacing: 0; text-transform: none;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The piano preset, with its ◀ ▶, lives in the Mix card: the thing changed most. */
+.ppreset { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.ppreset span { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ppreset button { min-height: 36px; min-width: 40px; padding: 0 8px; font-size: 15px; }
+/* ↺ on a row whose value differs from the patch: tap it to go back. */
+.row label .revert { margin-left: 8px; min-height: 30px; min-width: 30px; padding: 0 7px; font-size: 14px; border-radius: 8px; vertical-align: middle; }
+body.mapping .revert { display: none; }
+.slots button span { display: flex; flex-direction: column; min-width: 0; }
+.slots button small { font-size: 12px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.slots button.on small { color: var(--seed); opacity: .75; }
 body.mapping header { background: var(--warn); border-bottom-color: #b87a1c; color: var(--seed); }
 body.mapping header button { background: var(--seed); color: var(--core); border-color: var(--seed); }
 body.mapping #map { animation: pulse 1s ease-in-out infinite alternate; }
@@ -86,7 +105,6 @@ main {
 .row output { grid-area: value; text-align: right; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .row > input, .row > .seg, .row > select { grid-area: control; }
 .row.choice > .seg, .row.choice > select { margin: 4px 0 6px; }
-.row.differs label::before { content: "● "; color: var(--flesh); font-size: 12px; }
 .row.unknown output { color: var(--fuzz); }
 input[type=range] {
   -webkit-appearance: none; appearance: none; width: 100%; height: 48px; margin: 0;
@@ -132,8 +150,9 @@ select { width: 100%; }
 .seed { fill: var(--seed); transition: fill 80ms; }
 .seed.on { fill: var(--core); }
 .last { font-size: 15px; color: var(--muted); min-height: 2.8em; }
-.ccs { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
-.cc { font-size: 12px; text-align: center; color: var(--muted); }
+.ccs { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin-top: 10px; }
+.cc { font-size: 12px; text-align: center; color: var(--muted); min-width: 0; }
+.cc em { display: block; font-style: normal; font-size: 11px; color: var(--core); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc i { display: block; position: relative; height: 32px; border-radius: 6px; background: var(--line); overflow: hidden; margin-bottom: 2px; }
 .cc i b { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--flesh); }
 details.card > summary {
@@ -171,7 +190,7 @@ footer {
 .slots button { display: flex; align-items: center; gap: 10px; text-align: left; padding: 0 12px; min-height: 48px; }
 .slots button b { width: 28px; flex: none; }
 .slots button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (min-width: 768px) { .slots { grid-template-columns: repeat(4, 1fr); } }
+@media (min-width: 640px) { .slots { grid-template-columns: repeat(4, 1fr); } }
 /* Pianoteq preset bar and browser (inside the Pianoteq section). */
 .presets .pname { font-size: 17px; font-weight: 600; min-height: 44px; display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pbrowser { display: grid; gap: 8px; padding: 0 0 8px; }
@@ -183,7 +202,8 @@ footer {
 .prow { display: grid; grid-template-columns: 1fr 48px; gap: 6px; }
 .prow button { text-align: left; min-height: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prow button:last-child { text-align: center; padding: 0; font-size: 20px; }
-@media (min-width: 768px) {
+/* 640px: a phone held sideways already gets two columns. */
+@media (min-width: 640px) {
   main { grid-template-columns: 1fr 1fr; padding-left: 16px; padding-right: 16px; }
   .modes { grid-template-columns: repeat(3, 1fr); }
   .mode { border-top: 0; padding-top: 0; }
@@ -206,6 +226,7 @@ footer {
   <button type="button" id="map" aria-pressed="false">Map</button>
   <button type="button" id="panic" class="mappable">Panic</button>
   <div id="maphint" role="status"><span id="maptext">MAP MODE — tap a control, then move the knob or press the button on your controller.</span></div>
+  <div id="hostbanner" role="status"></div>
 </header>
 <main id="main">
   <section class="card wide" style="padding: 0">
@@ -256,7 +277,6 @@ let meta = null;
 let source = null;
 let dragging = null;
 let flushTimer = null;
-let lastTap = { key: null, time: 0 };
 
 function keyOf(plugin, param) {
   if (param.cc !== undefined) return `cc:${param.cc}`;
@@ -303,6 +323,29 @@ function mappingFor(target) {
 
 function ccLabel(mapping) {
   return `CC ${mapping.cc}${mapping.channel ? ` ch${mapping.channel + 1}` : ''}`;
+}
+
+const ACTION_LABELS = { panic: 'Panic', morph: 'Morph', slot_next: 'Next slot', slot_prev: 'Prev slot', slot_save: 'Save slot' };
+const MIX_LABELS = { piano_vol: 'Piano vol', piano_send: 'Piano rev', sampler_vol: 'Sampler vol', sampler_send: 'Sampler rev',
+                     vocoder_vol: 'Vocoder vol', vocoder_send: 'Vocoder rev' };
+
+// A short human name for a mapping target, for the CC bars.
+function targetLabel(target) {
+  if (target.kind === 'action') return ACTION_LABELS[target.name] || target.name;
+  if (target.kind === 'port' && target.instance === 5) return MIX_LABELS[target.symbol] || target.symbol;
+  if (target.kind === 'port' && target.instance === 3) return 'Carrier';
+  if (target.kind === 'port' && target.instance === REVERB_INSTANCE) {
+    for (const r of meta.reverbs) {
+      const param = r.params.find((p) => p.symbol === target.symbol);
+      if (param) return `Reverb ${prettyName(param)}`;
+    }
+    return target.symbol;
+  }
+  const plugin = meta.plugins.find((p) => p.instance === target.instance);
+  if (!plugin) return '?';
+  const param = plugin.params.find((p) => target.kind === 'cc' ? p.cc === target.number
+    : target.kind === 'port' ? p.symbol === target.symbol : p.uri === target.uri);
+  return param ? prettyName(param) : '?';
 }
 
 function setMapMode(on) {
@@ -390,15 +433,23 @@ function renderMapping(control) {
   if (!mapping && unmap) unmap.remove();
 }
 
-// The "MIDI in" card shows a bar per mapped CC (channel-agnostic).
+// The "MIDI in" card shows a bar per mapped CC (channel-agnostic), named after what it drives.
 function renderCcBars() {
   const numbers = [...new Set(mappings.map((m) => m.cc))].sort((a, b) => a - b);
   const box = $('ccs');
   box.replaceChildren();
   for (const cc of numbers) {
+    const names = mappings.filter((m) => m.cc === cc).map((m) => targetLabel(m.target)).join(' + ');
     const cell = document.createElement('div');
     cell.className = 'cc';
-    cell.innerHTML = `<i><b id="cc${cc}"></b></i>${cc}`;
+    const bar = document.createElement('i');
+    const fill = document.createElement('b');
+    fill.id = `cc${cc}`;
+    bar.appendChild(fill);
+    const name = document.createElement('em');
+    name.textContent = names;
+    name.title = names;
+    cell.append(bar, name, document.createTextNode(`CC ${cc}`));
     box.appendChild(cell);
   }
 }
@@ -456,13 +507,7 @@ function makeControl(plugin, param, label) {
     input.id = `c${controls.size}`;
     lab.htmlFor = input.id;
     input.addEventListener('pointerdown', () => { dragging = key; });
-    const release = () => {
-      if (dragging === key) dragging = null;
-      const now = performance.now();
-      if (lastTap.key === key && now - lastTap.time < 300) change(key, param.baseline);
-      lastTap = { key, time: now };
-    };
-    input.addEventListener('pointerup', release);
+    input.addEventListener('pointerup', () => { if (dragging === key) dragging = null; });
     input.addEventListener('pointercancel', () => { dragging = null; });
     input.addEventListener('change', () => { if (dragging === key) dragging = null; });
     input.addEventListener('input', () => change(key, parseFloat(input.value)));
@@ -482,7 +527,21 @@ function render(control) {
   const v = values.has(control.key) ? values.get(control.key) : null;
   row.classList.toggle('unknown', v === null);
   const span = Math.abs(param.max - param.min) || 1;
-  row.classList.toggle('differs', v !== null && Math.abs(v - param.baseline) > span * 1e-4);
+  const differs = v !== null && Math.abs(v - param.baseline) > span * 1e-4;
+  row.classList.toggle('differs', differs);
+  let revert = row.querySelector('label .revert');
+  if (differs && !revert) {
+    revert = document.createElement('button');
+    revert.type = 'button';
+    revert.className = 'revert';
+    revert.textContent = '↺';
+    revert.title = `back to ${format(param, param.baseline)}`;
+    revert.setAttribute('aria-label', 'back to the patch value');
+    revert.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); change(control.key, param.baseline); });
+    row.querySelector('label').appendChild(revert);
+  } else if (!differs && revert) {
+    revert.remove();
+  }
   if (input.tagName === 'INPUT') {
     const shown = v === null ? param.baseline : v;
     if (dragging !== control.key) input.value = shown;
@@ -553,18 +612,37 @@ async function flush() {
     await fetch('/set', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ changes }) });
   } catch (error) {
-    setHost('offline');
+    setHost('unreachable');
   } finally {
     inFlight = false;
   }
+}
+
+// Sections: title, a status line that follows the state, and remembered open/closed.
+const sections = new Map();     // title -> details
+const OPEN_KEY = 'kiwi.open';
+
+function storedOpen() {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY)) || []; } catch (error) { return []; }
+}
+
+function rememberOpen() {
+  try {
+    localStorage.setItem(OPEN_KEY, JSON.stringify([...sections].filter(([, d]) => d.open).map(([t]) => t)));
+  } catch (error) { /* private mode: nothing to remember */ }
 }
 
 function section(title, build, note) {
   const details = document.createElement('details');
   details.className = 'card';
   const summary = document.createElement('summary');
-  summary.textContent = title;
+  const heading = document.createElement('span');
+  heading.textContent = title;
+  const status = document.createElement('span');
+  status.className = 'sum';
+  summary.append(heading, status);
   details.appendChild(summary);
+  sections.set(title, details);
   if (note) {
     const p = document.createElement('p');
     p.className = 'note';
@@ -577,8 +655,28 @@ function section(title, build, note) {
       build(details);
     }
     toggleRow(details);
+    rememberOpen();
   });
   $('main').appendChild(details);
+}
+
+function restoreOpen() {
+  const open = storedOpen();
+  for (const [title, details] of sections) if (open.includes(title)) details.open = true;
+}
+
+// What each summary line says when the card is closed (and open: it does not hurt).
+function renderSummaries() {
+  const text = (title, value) => { const d = sections.get(title); if (d) d.querySelector('.sum').textContent = value || ''; };
+  const reverb = meta.reverbs.find((r) => r.id === currentReverb);
+  text('Reverb', reverb ? reverb.name : '');
+  const preset = presetByUri(presetState.current);
+  text('Pianoteq', preset ? `${preset.family} · ${preset.name}` : 'Pianoteq default');
+  const env = [['A', 102], ['D', 103], ['S', 104], ['R', 105]]
+    .filter(([, cc]) => values.has(`cc:${cc}`))
+    .map(([letter, cc]) => `${letter} ${cc === 104 ? Math.round(values.get(`cc:${cc}`)) : values.get(`cc:${cc}`).toFixed(2)}`);
+  text('Sampler', env.join(' '));
+  if (values.has('port:7:threshold')) text('Limiter', `${values.get('port:7:threshold').toFixed(1)} dB`);
 }
 
 // Sections open and close per grid row: on a wide screen the cards beside the one
@@ -624,6 +722,7 @@ function build() {
       const param = mix.params.find((p) => p.symbol === `${prefix}_${suffix}`);
       if (param) card.appendChild(makeControl(mix, param, label));
     }
+    if (prefix === 'piano' && presetList.length) card.appendChild(buildMixPreset());
     $('modes').appendChild(card);
   }
   const carrier = plugin(3);
@@ -644,13 +743,31 @@ function build() {
   for (const p of meta.plugins) {
     if (p.instance === 5 || p.instance === 3) continue;
     if (p.kind === 'patch') {
-      const note = 'Pianoteq values are shown once set from this page.';
+      const note = 'Pianoteq cannot report its values: a slider shows one once set from this page.';
       section('Pianoteq', (d) => { buildPresetBar(d); addGrouped(d, p, p.params.filter((q) => q.curated)); }, note);
       section('Pianoteq · all parameters', (d) => addGrouped(d, p, p.params), note);
     } else {
       section(p.title, (d) => addGrouped(d, p, p.params));
     }
   }
+  restoreOpen();
+  renderSummaries();
+}
+
+// The current piano preset with ◀ ▶ inside the Mix card.
+function buildMixPreset() {
+  const box = document.createElement('div');
+  box.className = 'ppreset';
+  const prev = document.createElement('button');
+  prev.type = 'button'; prev.textContent = '◀'; prev.setAttribute('aria-label', 'previous piano preset');
+  prev.addEventListener('click', () => { if (!mapMode) stepPreset(-1); });
+  const name = document.createElement('span');
+  name.id = 'mixpreset';
+  const next = document.createElement('button');
+  next.type = 'button'; next.textContent = '▶'; next.setAttribute('aria-label', 'next piano preset');
+  next.addEventListener('click', () => { if (!mapMode) stepPreset(1); });
+  box.append(prev, name, next);
+  return box;
 }
 
 // The reverb slot can hold any of meta.reverbs; its controls are rebuilt on a switch.
@@ -694,7 +811,7 @@ async function chooseReverb(id) {
     await fetch('/reverb', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                              body: JSON.stringify({ id }) });
   } catch (error) {
-    setHost('offline');
+    setHost('unreachable');
   }
 }
 
@@ -724,9 +841,20 @@ function lightSeeds(notes) {
   for (let i = 0; i < 12; i++) $(`seed${i}`).classList.toggle('on', classes.has(i));
 }
 
+const HOST_BANNERS = {
+  starting: 'Audio host starting…',
+  offline: 'Audio host offline — kiwi-host is restarting.',
+  unreachable: 'No connection to kiwi — check the Wi‑Fi (the "kiwi" network) and reload.',
+};
+
+// `state` is what the Pi reports (online, idle, starting, offline); 'unreachable'
+// is the page's own verdict when its requests fail.
 function setHost(state) {
-  $('hostdot').className = `dot ${state}`;
+  $('hostdot').className = `dot ${state === 'unreachable' ? 'offline' : state}`;
   $('hostdot').title = `audio host: ${state}`;
+  const banner = $('hostbanner');
+  banner.textContent = HOST_BANNERS[state] || '';
+  banner.className = HOST_BANNERS[state] ? `show ${state}` : '';
 }
 
 let midiPulse = null;
@@ -776,6 +904,7 @@ function apply(delta) {
       if (bar) bar.style.height = `${(v / 127) * 100}%`;
     }
   }
+  if (meta) renderSummaries();
 }
 
 // A release outside the slider (mouse) must also end the drag, or that slider
@@ -787,7 +916,7 @@ function connect() {
   source = new EventSource('/events');
   source.onmessage = (event) => apply(JSON.parse(event.data));
   source.onerror = () => {
-    setHost('offline');
+    setHost('unreachable');
     // EventSource retries by itself, except after an HTTP error (e.g. 503 when
     // too many viewers, or the server restarting): then reconnect ourselves.
     if (source && source.readyState === EventSource.CLOSED) {
@@ -808,7 +937,8 @@ document.addEventListener('visibilitychange', () => (document.hidden ? disconnec
 
 // ----- presets --------------------------------------------------------------
 
-const slotState = { 'slot:current': 1, 'slot:name': '', 'slot:names': [], 'slot:dirty': false, 'morph:value': 0 };
+const slotState = { 'slot:current': 1, 'slot:name': '', 'slot:names': [], 'slot:summaries': [], 'slot:dirty': false,
+                    'morph:value': 0 };
 let editingName = false;
 
 async function post(path, body) {
@@ -816,7 +946,7 @@ async function post(path, body) {
     await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body || {}) });
   } catch (error) {
-    setHost('offline');
+    setHost('unreachable');
   }
 }
 
@@ -841,6 +971,17 @@ function renderSlots() {
     num.textContent = n;
     const name = document.createElement('span');
     name.textContent = names[n - 1] || `Preset ${n}`;
+    const summary = slotState['slot:summaries'][n - 1];
+    if (summary) {
+      const preset = presetByUri(summary.preset);
+      const reverb = meta && meta.reverbs.find((r) => r.id === summary.reverb);
+      const detail = [preset ? preset.name : null, reverb ? reverb.name : null].filter(Boolean).join(' · ');
+      if (detail) {
+        const small = document.createElement('small');
+        small.textContent = detail;
+        name.appendChild(small);
+      }
+    }
     button.append(num, name);
     button.addEventListener('click', () => {
       if (n === current) return;
@@ -995,9 +1136,11 @@ function renderPresetList() {
 }
 
 function renderPresetBar() {
-  if (!presetUi) return;
   const current = presetByUri(presetState.current);
-  presetUi.name.textContent = current ? `${current.family} · ${current.name}` : 'Pianoteq default';
+  const text = current ? `${current.family} · ${current.name}` : 'Pianoteq default';
+  if ($('mixpreset')) $('mixpreset').textContent = text;
+  if (!presetUi) return;
+  presetUi.name.textContent = text;
   renderPresetList();
 }
 
@@ -1018,7 +1161,7 @@ function load() {
       if (!document.hidden) connect();
     })
     .catch(() => {
-      setHost('offline');
+      setHost('unreachable');
       setTimeout(load, 2000);
     });
 }

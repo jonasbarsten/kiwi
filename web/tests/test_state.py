@@ -80,6 +80,18 @@ class StateStoreTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.slot_path(1) + '.tmp'))
         self.assertEqual(self.store.names()[0], 'Warm')
 
+    def test_summaries_show_preset_and_reverb_per_slot(self):
+        self.store.set_preset('file:///x/a.ttl')
+        self.store.set_reverb('calf')
+        self.store.set_name('Warm')
+        self.store.save()
+        self.store.select(2)
+        self.store.set_reverb('plate')             # RAM only: still reported for the current slot
+        summaries = self.store.summaries()
+        self.assertEqual(summaries[0], {'name': 'Warm', 'preset': 'file:///x/a.ttl', 'reverb': 'calf'})
+        self.assertEqual(summaries[1], {'name': 'Preset 2', 'preset': None, 'reverb': 'plate'})
+        self.assertEqual(len(summaries), 8)
+
     def test_select_writes_current_and_loads_slot(self):
         self.store.set_param(5, 'piano_vol', 0.5, baseline=0.8)
         self.store.save()

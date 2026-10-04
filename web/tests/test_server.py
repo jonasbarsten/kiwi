@@ -410,6 +410,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(saved['params'], {'5:piano_vol': 0.3})
         self.assertEqual(saved['name'], 'Warm')
         self.assertEqual(self.read_until(response, 'slot:names')['slot:names'][0], 'Warm')
+        self.assertEqual(self.app.model.get('slot:summaries')[0], {'name': 'Warm', 'preset': None, 'reverb': None})
         self.assertEqual(self.app.link.led.last, (8, 0.1), 'a save is a rapid burst')
         conn.close()
 
