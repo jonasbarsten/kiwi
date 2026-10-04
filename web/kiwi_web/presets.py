@@ -25,10 +25,28 @@ _ENTRY = re.compile(r'^<([^>]+\.ttl)>\s*\n(?:[^\n]*\n)*?[^\n]*a pset:Preset', re
 _LABEL = re.compile(r'rdfs:label "([^"]*)"')
 
 
+# The characters serd (lilv's parser) leaves unescaped in file URIs: unreserved,
+# sub-delims, ':' and '@'. Preset file names contain commas, apostrophes, '&' and
+# parentheses, and the URI must match lilv's own byte for byte.
+_SERD_SAFE = "/-._~:@!$&'()*+,;="
+
+
 def encode_path(path):
-    """A file:// URI for a filesystem path, as lilv resolves it (spaces and
-    non-ASCII percent-encoded, slashes kept)."""
-    return 'file://' + quote(path, safe='/')
+    """A file:// URI for a filesystem path, encoded the way lilv/serd does it
+    (spaces and non-ASCII percent-encoded; sub-delims kept)."""
+    return 'file://' + quote(path, safe=_SERD_SAFE)
+
+
+def encode_name(name):
+    """A preset file name as lilv keeps it: the manifest's relative reference is
+    resolved byte for byte against the (encoded) bundle URI, so non-ASCII stays
+    raw while ASCII characters outside serd's safe set are percent-encoded."""
+    return ''.join(c if ord(c) >= 0x80 else quote(c, safe=_SERD_SAFE) for c in name)
+
+
+def preset_uri(directory, filename):
+    """The preset URI mod-host's preset_load wants (verified on the device)."""
+    return encode_path(directory) + '/' + encode_name(filename)
 
 
 def slug(text):
@@ -75,7 +93,7 @@ def index_presets(root, link_root=None):
                     name = label.group(1)
             except OSError:
                 continue
-            presets.append({'uri': encode_path(path), 'name': name, 'family': family,
+            presets.append({'uri': preset_uri(directory, filename), 'name': name, 'family': family,
                             'bundle': bundle_path})
     presets.sort(key=lambda p: (p['family'].lower(), p['name'].lower()))
     return presets

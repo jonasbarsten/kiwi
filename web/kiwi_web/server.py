@@ -506,6 +506,8 @@ class HostLink:
         # RAM takes the preset only once mod-host has loaded it.
         if self._execute([('preset', uri)]) == 0:
             self.store.set_preset(uri)
+        else:
+            print(f'kiwi-web: mod-host refused preset {uri}', flush=True)
         self._publish_state()
 
     def _apply_morph(self):

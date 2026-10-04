@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from kiwi_web.presets import Favourites, encode_path, index_presets, load_commands
+from kiwi_web.presets import Favourites, encode_path, index_presets, load_commands, preset_uri
 
 MANIFEST = '''@prefix pset: <http://lv2plug.in/ns/ext/presets#> .
 
@@ -34,6 +34,24 @@ class PresetsTest(unittest.TestCase):
     def test_encode_path(self):
         self.assertEqual(encode_path('/home/patch/kiwi-data/Pianoteq 8-factory-presets-Blüthner.lv2/A_B.ttl'),
                          'file:///home/patch/kiwi-data/Pianoteq%208-factory-presets-Bl%C3%BCthner.lv2/A_B.ttl')
+
+    def test_encode_path_keeps_the_characters_lilv_keeps(self):
+        # serd leaves sub-delims unescaped; an escaped one would not match the preset lilv knows.
+        self.assertEqual(encode_path("/x/Hand_Pan_-_dampers,_hand_played.ttl"),
+                         "file:///x/Hand_Pan_-_dampers,_hand_played.ttl")
+        self.assertEqual(encode_path("/x/C._Bechstein_DG_Bass_&_Piano_split.ttl"),
+                         "file:///x/C._Bechstein_DG_Bass_&_Piano_split.ttl")
+        self.assertEqual(encode_path("/x/H._Ruckers_II_Harpsichord_4'.ttl"), "file:///x/H._Ruckers_II_Harpsichord_4'.ttl")
+        self.assertEqual(encode_path("/x/Ant._Petrof_Warm_(copy).ttl"), "file:///x/Ant._Petrof_Warm_(copy).ttl")
+        self.assertEqual(encode_path("/x/a b#c?.ttl"), "file:///x/a%20b%23c%3F.ttl")
+
+    def test_preset_uri_encodes_the_directory_but_not_the_file_name_bytes(self):
+        # lilv forms the directory from the filesystem path (non-ASCII encoded) and the
+        # file name from the manifest's relative reference (non-ASCII raw).
+        self.assertEqual(preset_uri('/x/Pianoteq 8-factory-presets-Blüthner.lv2', 'Blüthner_Cinematic.ttl'),
+                         'file:///x/Pianoteq%208-factory-presets-Bl%C3%BCthner.lv2/Blüthner_Cinematic.ttl')
+        self.assertEqual(preset_uri('/x/E.lv2', "Hand_Pan_-_dampers,_hand_played.ttl"),
+                         "file:///x/E.lv2/Hand_Pan_-_dampers,_hand_played.ttl")
 
     def test_index_reads_bundles(self):
         with tempfile.TemporaryDirectory() as tmp:
