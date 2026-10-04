@@ -703,7 +703,7 @@ class App:
         self.presets = load_presets(args.presets)
         self.bundles = {p['uri']: p['bundle'] for p in self.presets}
         self.favourites = presets.Favourites(os.path.join(args.state_dir, 'favourites.json'))
-        self.favourites.load()
+        self.favourites.load(self.presets)
         self.known_targets = ccmap.known_targets(self.meta)
         self.mappings = ccmap.CcMap(os.path.join(args.state_dir, 'ccmap.json'), self.known_targets)
         self.mappings.load()

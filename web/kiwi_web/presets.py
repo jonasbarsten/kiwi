@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import unicodedata
+from urllib.parse import unquote
 
 from . import pianoteq_state, reverbs
 
@@ -147,13 +148,22 @@ class Favourites:
         self.path = path
         self.uris = []
 
-    def load(self):
+    def load(self, known=None):
+        """Reads the stars. With `known` (the preset list), stars whose URI no longer
+        exists are moved to the preset of the same name (the export layout changed
+        once) or dropped, and the file is rewritten if that changed anything."""
         try:
             with open(self.path) as f:
                 loaded = json.load(f)
         except (OSError, ValueError):
             loaded = []
-        self.uris = [u for u in loaded if isinstance(u, str)] if isinstance(loaded, list) else []
+        uris = [u for u in loaded if isinstance(u, str)] if isinstance(loaded, list) else []
+        if known is not None:
+            uris = migrate_uris(uris, known)
+            if uris != loaded:
+                self.uris = uris
+                self._write()
+        self.uris = uris
         return self.uris
 
     def toggle(self, uri, on):
@@ -164,6 +174,10 @@ class Favourites:
             self.uris.remove(uri)
         else:
             return False
+        self._write()
+        return True
+
+    def _write(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp = self.path + '.tmp'
         with open(tmp, 'w') as f:
@@ -171,7 +185,23 @@ class Favourites:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.path)
-        return True
+
+
+def migrate_uris(uris, known):
+    """`uris` with every URI that is not in `known` ([{'uri', 'name'}]) replaced by
+    the known preset whose name slug matches its file name, duplicates and
+    unmatched ones dropped, order kept."""
+    valid = {p['uri'] for p in known}
+    by_slug = {slug(p['name']): p['uri'] for p in known}
+    result = []
+    for uri in uris:
+        if uri not in valid:
+            name = unquote(uri.rsplit('/', 1)[-1])
+            name = name[:-4] if name.endswith('.ttl') else name
+            uri = by_slug.get(slug(name.replace('_', ' ')))
+        if uri is not None and uri not in result:
+            result.append(uri)
+    return result
 
 
 assert reverbs.REVERB_INSTANCE != PIANOTEQ_INSTANCE

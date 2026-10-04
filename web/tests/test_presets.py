@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import tempfile
@@ -123,6 +124,23 @@ class PresetsTest(unittest.TestCase):
             with open(path, 'w') as f:
                 f.write('{nope')
             self.assertEqual(Favourites(path).load(), [])
+
+    def test_favourites_follow_renamed_presets(self):
+        known = [{'uri': 'file:///out/bechsteindg.lv2/c-bechstein-dg-broken.ttl', 'name': 'C. Bechstein DG Broken'},
+                 {'uri': 'file:///out/my-presets.lv2/sk-1.ttl', 'name': 'SK 1'}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'favourites.json')
+            with open(path, 'w') as f:
+                json.dump(['file:///old/Pianoteq%208-factory-presets-BechsteinDG.lv2/C._Bechstein_DG_Broken.ttl',
+                           'file:///old/Pianoteq%208-user-presets-My%20Presets.lv2/SK_1.ttl',
+                           'file:///out/my-presets.lv2/sk-1.ttl',
+                           'file:///old/Gone.lv2/Nothing_Like_It.ttl'], f)
+            favourites = Favourites(path)
+            self.assertEqual(favourites.load(known), ['file:///out/bechsteindg.lv2/c-bechstein-dg-broken.ttl',
+                                                      'file:///out/my-presets.lv2/sk-1.ttl'])
+            with open(path) as f:
+                self.assertEqual(json.load(f), favourites.uris, 'the migrated list is written once')
+            self.assertEqual(Favourites(path).load(known), favourites.uris)
 
     def test_load_commands(self):
         uri = 'file:///x/out/electric.lv2/mki-amped.ttl'
