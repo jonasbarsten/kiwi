@@ -135,10 +135,15 @@ a full-screen app.
   preset. Favourites are global and are written only when you star or unstar (the one
   deliberate write besides save/select). Presets of instruments you do not own play in
   Pianoteq's demo mode. `install.sh` exports all presets from the Pianoteq standalone into
-  `~/kiwi-data/pianoteq-presets` (re-exported when Pianoteq is updated) and lists them in
-  `web/presets.json`, with space-free symlinks to the bundles in
-  `~/kiwi-data/pianoteq-presets-bundles` (mod-host's `bundle_add` cannot take a path with
-  spaces or percent-encoding). A `preset_load 0 <uri>` line in `kiwi.patch` would make that preset the
+  `~/kiwi-data/pianoteq-presets` (re-exported when Pianoteq is updated), rewrites them into
+  `~/kiwi-data/pianoteq-presets-lv2` and lists them in `web/presets.json`. The rewrite is
+  not cosmetic: Pianoteq 8.3.2 exports the state under `urn:juce:stateBinary`, a key its
+  own LV2 plugin never reads, so every host "loads" such a preset and nothing changes. The
+  plugin restores `Pianoteq8:StateString`, a JUCE-base64 string of the same blob behind a
+  28-byte header (`web/kiwi_web/pianoteq_state.py`; the header's two constant words were
+  learned from a state the plugin saved, so a future Pianoteq may need them re-learned).
+  The rewritten bundles have ASCII, space-free paths, which is also what mod-host's
+  `bundle_add` needs. A `preset_load 0 <uri>` line in `kiwi.patch` would make that preset the
   baseline; without one, a slot without a preset leaves the piano as it is.
 - **Presets**: see the next section. A dot marks values that differ from `host/kiwi.patch`;
   **Reset to patch** puts them back live (RAM only; the saved preset is untouched).

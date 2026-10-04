@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Prints web/presets.json: the Pianoteq presets exported under the given root."""
+"""Rewrites the Pianoteq preset export under <root> into <out>, in the form the
+plugin loads (see kiwi_web.pianoteq_state), and prints web/presets.json."""
 import json
 import os
 import sys
@@ -13,8 +14,8 @@ DEFAULT_ROOT = '/home/patch/kiwi-data/pianoteq-presets'
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ROOT
-    # Space-free symlinks to the bundles, next to the export (see kiwi_web.presets).
-    presets = index_presets(root, link_root=root.rstrip('/') + '-bundles')
+    out = sys.argv[2] if len(sys.argv) > 2 else root.rstrip('/') + '-lv2'
+    presets = index_presets(root, out)
     if not presets:
         print(f'gen_presets: no presets found under {root}', file=sys.stderr)
     json.dump({'presets': presets}, sys.stdout)

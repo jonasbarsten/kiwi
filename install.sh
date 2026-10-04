@@ -151,8 +151,10 @@ sudo rm -f /etc/tmpfiles.d/kiwi.conf   # the LED permission is now set by kiwi-w
 
 section "Pianoteq presets"
 # Exported as LV2 preset bundles, outside LV2_PATH so mod-host's boot does not parse
-# them; re-exported when the Pianoteq version changes. ~2 s, 3 MB.
+# them; re-exported when the Pianoteq version changes. ~2 s, 3 MB. gen_presets (below)
+# rewrites them into $presets_dir-lv2, the form the plugin actually restores.
 presets_dir="$HOME/kiwi-data/pianoteq-presets"
+rm -rf "$presets_dir-bundles"   # symlinks an earlier version used
 pianoteq="$HOME/.vst/Pianoteq 8"
 if [ -x "$pianoteq" ]; then
     version=$("$pianoteq" --version 2>/dev/null | head -1)
@@ -170,7 +172,7 @@ fi
 section "Web UI"
 python3 "$KIWI_DIR/web/tools/gen_params.py" > "$KIWI_DIR/web/params.json.tmp"
 mv "$KIWI_DIR/web/params.json.tmp" "$KIWI_DIR/web/params.json"
-python3 "$KIWI_DIR/web/tools/gen_presets.py" "$presets_dir" > "$KIWI_DIR/web/presets.json.tmp"
+python3 "$KIWI_DIR/web/tools/gen_presets.py" "$presets_dir" "$presets_dir-lv2" > "$KIWI_DIR/web/presets.json.tmp"
 mv "$KIWI_DIR/web/presets.json.tmp" "$KIWI_DIR/web/presets.json"
 mkdir -p "$HOME/.local/state/kiwi"
 sudo install -m 644 "$KIWI_DIR/system/kiwi-web.service" "$KIWI_DIR/system/kiwi-restore.service" /etc/systemd/system/

@@ -1,8 +1,10 @@
 import os
+import re
 import tempfile
 import unittest
 
-from kiwi_web.presets import Favourites, encode_path, index_presets, load_commands, preset_uri
+from kiwi_web.pianoteq_state import STATE_KEY, state_string
+from kiwi_web.presets import Favourites, index_presets, load_commands, slug
 
 MANIFEST = '''@prefix pset: <http://lv2plug.in/ns/ext/presets#> .
 
@@ -21,67 +23,92 @@ MANIFEST = '''@prefix pset: <http://lv2plug.in/ns/ext/presets#> .
 	a pset:Preset ;
 	pset:bank <BANK_Electric> ;
 	rdfs:seeAlso <MKI_Amped.ttl> .
+<Broken.ttl>
+	lv2:appliesTo <https://www.modartt.com/lv2/Pianoteq8> ;
+	a pset:Preset ;
+	pset:bank <BANK_Electric> ;
+	rdfs:seeAlso <Broken.ttl> .
 '''
 PRESET = '''<>
 	a pset:Preset ;
 	lv2:appliesTo <https://www.modartt.com/lv2/Pianoteq8> ;
 	rdfs:label "%s" ;
-	state:state [ ] .
+	state:state [
+		<urn:juce:stateBinary> """
+	%s
+"""^^xsd:base64Binary
+] .
 '''
+BLOB = 'UHJWSyYAAAJYRlRQ'      # PrVK&\0\0\x02XFTP
+
+
+def write_export(root):
+    bundle = os.path.join(root, 'Pianoteq 8-factory-presets-Electric.lv2')
+    os.mkdir(bundle)
+    with open(os.path.join(bundle, 'manifest.ttl'), 'w') as f:
+        f.write(MANIFEST)
+    for name, label in [('MKII_Spark', 'MKII "Spark"'), ('MKI_Amped', 'MKI Amped')]:
+        with open(os.path.join(bundle, f'{name}.ttl'), 'w') as f:
+            f.write(PRESET % (label.replace('"', '\\"'), BLOB))
+    with open(os.path.join(bundle, 'Broken.ttl'), 'w') as f:
+        f.write('<> a pset:Preset .\n')            # no state: skipped
+    os.mkdir(os.path.join(root, 'broken.lv2'))     # no manifest: skipped
+    return bundle
 
 
 class PresetsTest(unittest.TestCase):
-    def test_encode_path(self):
-        self.assertEqual(encode_path('/home/patch/kiwi-data/Pianoteq 8-factory-presets-Blüthner.lv2/A_B.ttl'),
-                         'file:///home/patch/kiwi-data/Pianoteq%208-factory-presets-Bl%C3%BCthner.lv2/A_B.ttl')
+    def test_slug(self):
+        self.assertEqual(slug('Blüthner'), 'bluthner')
+        self.assertEqual(slug('Bösendorfer 280VC'), 'bosendorfer-280vc')
+        self.assertEqual(slug("H. Ruckers II Harpsichord 4'"), 'h-ruckers-ii-harpsichord-4')
+        self.assertEqual(slug('ñ'), 'n')
+        self.assertEqual(slug('日本'), 'preset')
 
-    def test_encode_path_keeps_the_characters_lilv_keeps(self):
-        # serd leaves sub-delims unescaped; an escaped one would not match the preset lilv knows.
-        self.assertEqual(encode_path("/x/Hand_Pan_-_dampers,_hand_played.ttl"),
-                         "file:///x/Hand_Pan_-_dampers,_hand_played.ttl")
-        self.assertEqual(encode_path("/x/C._Bechstein_DG_Bass_&_Piano_split.ttl"),
-                         "file:///x/C._Bechstein_DG_Bass_&_Piano_split.ttl")
-        self.assertEqual(encode_path("/x/H._Ruckers_II_Harpsichord_4'.ttl"), "file:///x/H._Ruckers_II_Harpsichord_4'.ttl")
-        self.assertEqual(encode_path("/x/Ant._Petrof_Warm_(copy).ttl"), "file:///x/Ant._Petrof_Warm_(copy).ttl")
-        self.assertEqual(encode_path("/x/a b#c?.ttl"), "file:///x/a%20b%23c%3F.ttl")
-
-    def test_preset_uri_encodes_the_directory_but_not_the_file_name_bytes(self):
-        # lilv forms the directory from the filesystem path (non-ASCII encoded) and the
-        # file name from the manifest's relative reference (non-ASCII raw).
-        self.assertEqual(preset_uri('/x/Pianoteq 8-factory-presets-Blüthner.lv2', 'Blüthner_Cinematic.ttl'),
-                         'file:///x/Pianoteq%208-factory-presets-Bl%C3%BCthner.lv2/Blüthner_Cinematic.ttl')
-        self.assertEqual(preset_uri('/x/E.lv2', "Hand_Pan_-_dampers,_hand_played.ttl"),
-                         "file:///x/E.lv2/Hand_Pan_-_dampers,_hand_played.ttl")
-
-    def test_index_reads_bundles(self):
+    def test_index_rewrites_bundles_in_the_form_the_plugin_loads(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundle = os.path.join(tmp, 'Pianoteq 8-factory-presets-Electric.lv2')
-            os.mkdir(bundle)
-            with open(os.path.join(bundle, 'manifest.ttl'), 'w') as f:
-                f.write(MANIFEST)
-            for name, label in [('MKII_Spark', 'MKII Spark'), ('MKI_Amped', 'MKI Amped')]:
-                with open(os.path.join(bundle, f'{name}.ttl'), 'w') as f:
-                    f.write(PRESET % label)
-            os.mkdir(os.path.join(tmp, 'broken.lv2'))      # no manifest: skipped
-            presets = index_presets(tmp)
-            self.assertEqual([p['name'] for p in presets], ['MKI Amped', 'MKII Spark'])
+            write_export(tmp)
+            out = os.path.join(tmp, 'out')
+            presets = index_presets(tmp, out)
+            self.assertEqual([p['name'] for p in presets], ['MKI Amped', 'MKII "Spark"'])
             self.assertEqual(presets[0]['family'], 'Electric')
-            self.assertTrue(presets[0]['uri'].startswith('file://'))
-            self.assertTrue(presets[0]['uri'].endswith('Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'))
+            bundle = os.path.join(out, 'electric.lv2')
             self.assertEqual(presets[0]['bundle'], bundle)
+            self.assertEqual(presets[0]['uri'], 'file://' + os.path.join(bundle, 'mki-amped.ttl'))
+            self.assertEqual(presets[1]['uri'], 'file://' + os.path.join(bundle, 'mkii-spark.ttl'))
+            self.assertEqual(sorted(os.listdir(bundle)), ['manifest.ttl', 'mki-amped.ttl', 'mkii-spark.ttl'])
 
-            # With a link root, bundle_add gets a space-free symlink to the real bundle.
-            links = os.path.join(tmp, 'links')
-            linked = index_presets(tmp, link_root=links)
-            self.assertEqual(linked[0]['bundle'], os.path.join(links, 'pianoteq-8-factory-presets-electric.lv2'))
-            self.assertNotIn(' ', linked[0]['bundle'])
-            self.assertEqual(os.readlink(linked[0]['bundle']), bundle)
-            self.assertTrue(linked[0]['uri'].endswith('Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'),
-                            'the preset URI stays the real, canonical file')
-            index_presets(tmp, link_root=links)     # idempotent
+            with open(os.path.join(bundle, 'mki-amped.ttl')) as f:
+                ttl = f.read()
+            self.assertIn('rdfs:label "MKI Amped"', ttl)
+            with open(os.path.join(bundle, 'mkii-spark.ttl')) as f:
+                self.assertIn('rdfs:label "MKII \\"Spark\\""', f.read())
+            expected = state_string(b'PrVK&\x00\x00\x02XFTP')
+            self.assertIn(f'<{STATE_KEY}> "{expected}"', ttl)
+            self.assertNotIn('stateBinary', ttl)
+            with open(os.path.join(bundle, 'manifest.ttl')) as f:
+                manifest = f.read()
+            self.assertIn('rdfs:label "Electric"', manifest)
+            self.assertEqual(sorted(re.findall(r'^<([^>]+\.ttl)>', manifest, re.M)), ['mki-amped.ttl', 'mkii-spark.ttl'])
+
+    def test_index_replaces_stale_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_export(tmp)
+            out = os.path.join(tmp, 'out')
+            os.makedirs(os.path.join(out, 'old.lv2'))
+            index_presets(tmp, out)
+            self.assertEqual(os.listdir(out), ['electric.lv2'])
+
+    def test_colliding_names_get_distinct_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = write_export(tmp)
+            with open(os.path.join(bundle, 'MKI_Amped.ttl'), 'w') as f:
+                f.write(PRESET % ('MKII Spark', BLOB))
+            presets = index_presets(tmp, os.path.join(tmp, 'out'))
+            self.assertEqual(sorted(os.path.basename(p['uri']) for p in presets), ['mkii-spark-2.ttl', 'mkii-spark.ttl'])
 
     def test_missing_root_is_empty(self):
-        self.assertEqual(index_presets('/nonexistent'), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(index_presets('/nonexistent', os.path.join(tmp, 'out')), [])
 
     def test_favourites_roundtrip_and_corrupt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,10 +125,10 @@ class PresetsTest(unittest.TestCase):
             self.assertEqual(Favourites(path).load(), [])
 
     def test_load_commands(self):
-        uri = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'
-        bundle = '/x/links/pianoteq-8-factory-presets-electric.lv2'
+        uri = 'file:///x/out/electric.lv2/mki-amped.ttl'
+        bundle = '/x/out/electric.lv2'
         self.assertEqual(load_commands(uri, bundle), [
-            'bundle_add /x/links/pianoteq-8-factory-presets-electric.lv2/',
+            'bundle_add /x/out/electric.lv2/',
             f'preset_load 0 {uri}',
             'patch_set 0 https://www.modartt.com/lv2/Pianoteq8:Reverb_20Switch 0.000000',
         ])
