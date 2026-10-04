@@ -1,8 +1,11 @@
 """kiwi-web: serves the control page and bridges it to mod-host.
 
-With no page open it holds no mod-host connection and runs no MIDI monitor.
-It connects only after kiwi-patch and kiwi-restore have finished, so it never
-competes with them for mod-host's single client slot.
+State lives in RAM in one of eight preset slots (see state.py); the only disk
+writes are an explicit save and the one-line `current` file on slot selection.
+The mod-host connection is held only while a page is open or a change is
+pending, and only after kiwi-patch and kiwi-restore have finished, so it never
+competes with them for mod-host's single client slot. The MIDI monitor runs
+permanently so the morph CC works without a page.
 """
 import argparse
 import gzip
@@ -17,6 +20,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import reverbs, security
+from .applier import Applier
+from .led import Led
 from .midi import MidiMonitor, describe
 from .modhost import HostClient, HostError
 from .patchfile import parse_patch
@@ -28,6 +33,7 @@ STREAM_INTERVAL = 0.1
 KEEPALIVE = 15.0
 IDLE_DISCONNECT = 10.0
 MAX_BODY = 16384
+MORPH_CC = 27
 
 
 class Model:
@@ -96,11 +102,6 @@ def param_name(plugin, param):
     return param['symbol'] if plugin['kind'] == 'port' else param['uri']
 
 
-def reverb_baselines(meta):
-    """{reverb id: {symbol: baseline}} for every reverb the page may load."""
-    return {r['id']: {q['symbol']: q['baseline'] for q in r['params']} for r in meta.get('reverbs', [])}
-
-
 def cc_controls(meta):
     """{cc number: param} for parameters the page sends as MIDI CCs (the sampler envelope)."""
     return {q['cc']: q for p in meta['plugins'] for q in p['params'] if 'cc' in q}
@@ -123,37 +124,64 @@ def switch_reverb(client, reverb_id, settings):
     return failures
 
 
+def execute_ops(client, midi, cc_params, ops, on_applied=None):
+    """Runs Applier operations against mod-host / the MIDI device.
+
+    `on_applied(op)` is called for every operation that succeeded. Returns the
+    number of failures. Raises HostError if mod-host goes away.
+    """
+    failures = 0
+    for op in ops:
+        kind = op[0]
+        if kind == 'reverb':
+            ok = switch_reverb(client, op[1], op[2]) == 0
+        elif kind == 'port':
+            ok = client.param_set(op[1], op[2], op[3]) == 0
+        elif kind == 'patch':
+            ok = client.patch_set(op[1], op[2], op[3]) == 0
+        else:
+            param = cc_params.get(op[1])
+            ok = param is not None and midi is not None and send_cc(midi, param, op[2])
+        if ok and on_applied is not None:
+            on_applied(op)
+        failures += not ok
+    return failures
+
+
 class HostLink:
     """Owns the single mod-host connection, only while a page or a change needs it."""
 
-    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None):
+    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None, led=None):
         self.model = model
         self.client = client
         self.store = store
         self.units_ready = units_ready
         self.clock = clock
         self.midi = midi
-        self.baselines = {(p['kind'], p['instance'], param_name(p, q)): q['baseline']
-                          for p in meta['plugins'] for q in p['params'] if 'cc' not in q}
+        self.led = led or Led()
+        self.applier = Applier(meta)
+        self.cc_params = cc_controls(meta)
         self.port_params = [(p['instance'], q['symbol'])
                             for p in meta['plugins'] if p['kind'] == 'port' for q in p['params'] if 'cc' not in q]
-        self.cc_params = cc_controls(meta)
-        for number, param in self.cc_params.items():
-            self.model.update(f'cc:{number}', store.data['cc'].get(str(number), param['baseline']))
         self.mapped = [(m['instance'], m['symbol']) for m in meta['cc_map']]
-        self.reverb_baselines = reverb_baselines(meta)
-        self.default_reverb = meta.get('default_reverb')
-        self.current_reverb = store.data.get('reverb') or self.default_reverb
-        self.model.update('reverb:current', self.current_reverb)
+        self.current_reverb = self.applier.effective_reverb(store.data)
         self._lock = threading.Lock()
         self._sets = {}
         self._reads = set()
         self._reverb = None
         self._reset = False
+        self._select = None
+        self._save = False
+        self._morph = None
+        self._name = None
         self._viewers = 0
         self._last_need = None
         self._wake = threading.Event()
         self._stop = False
+        self.model.update('morph:value', 0.0)
+        self._publish_state()
+
+    # ----- requests from the HTTP side ----------------------------------------
 
     def add_viewer(self):
         with self._lock:
@@ -163,6 +191,12 @@ class HostLink:
     def remove_viewer(self):
         with self._lock:
             self._viewers -= 1
+            self._last_need = self.clock()
+        self._wake.set()
+
+    def _request(self, attribute, value):
+        with self._lock:
+            setattr(self, attribute, value)
             self._last_need = self.clock()
         self._wake.set()
 
@@ -178,16 +212,22 @@ class HostLink:
         self._wake.set()
 
     def request_reverb(self, reverb_id):
-        with self._lock:
-            self._reverb = reverb_id
-            self._last_need = self.clock()
-        self._wake.set()
+        self._request('_reverb', reverb_id)
 
     def request_reset(self):
-        with self._lock:
-            self._reset = True
-            self._last_need = self.clock()
-        self._wake.set()
+        self._request('_reset', True)
+
+    def request_select(self, slot):
+        self._request('_select', slot)
+
+    def request_save(self):
+        self._request('_save', True)
+
+    def request_morph(self, t):
+        self._request('_morph', min(max(float(t), 0.0), 1.0))
+
+    def request_name(self, name):
+        self._request('_name', name)
 
     def stop(self):
         self._stop = True
@@ -195,9 +235,13 @@ class HostLink:
 
     def _needed(self):
         with self._lock:
-            if self._viewers > 0 or self._sets or self._reset or self._reverb is not None:
+            if (self._viewers > 0 or self._sets or self._reset or self._reverb is not None
+                    or self._select is not None or self._save or self._morph is not None
+                    or self._name is not None):
                 return True
             return self._last_need is not None and self.clock() - self._last_need < IDLE_DISCONNECT
+
+    # ----- the loop ----------------------------------------------------------------
 
     def run(self):
         next_status = 0.0
@@ -205,11 +249,7 @@ class HostLink:
         while not self._stop:
             self._wake.wait(timeout=0.2)
             self._wake.clear()
-            try:
-                if self.store.due() and self.store.flush():
-                    self.model.update('status:saved', time.time())
-            except OSError as error:
-                print(f'kiwi-web: autosave failed: {error!r}', flush=True)
+            self._apply_name()
             if not self._needed():
                 if self.client.connected:
                     self.client.close()
@@ -218,8 +258,11 @@ class HostLink:
             if not self.client.connected and not self._connect():
                 continue
             try:
+                self._apply_select()
+                self._apply_save()
                 self._apply_reset()
                 self._apply_reverb()
+                self._apply_morph()
                 self._apply_sets()
                 self._apply_reads()
                 now = self.clock()
@@ -257,6 +300,21 @@ class HostLink:
         self.model.update('status:host', 'online')
         return True
 
+    # ----- model bookkeeping --------------------------------------------------------
+
+    def _publish_state(self):
+        store = self.store
+        self.model.update('slot:current', store.slot)
+        self.model.update('slot:name', store.data['name'])
+        self.model.update('slot:names', store.names())
+        self.model.update('slot:dirty', store.dirty)
+        self.model.update('reverb:current', self.current_reverb)
+        for number, param in self.cc_params.items():
+            self.model.update(f'cc:{number}', store.data['cc'].get(str(number), param['baseline']))
+        for key, value in store.data['patch_params'].items():
+            instance, uri = StateStore.split_key(key)
+            self.model.update(f'patch:{instance}:{uri}', value)
+
     def _read(self, instance, symbol):
         value = self.client.param_get(instance, symbol)
         if value is not None:
@@ -264,59 +322,107 @@ class HostLink:
         return value
 
     def _read_reverb(self):
-        for symbol in self.reverb_baselines.get(self.current_reverb, {}):
+        for symbol in self.applier.reverb.get(self.current_reverb, {}):
             self._read(reverbs.REVERB_INSTANCE, symbol)
 
-    def _load_reverb(self, reverb_id, settings):
-        """Swaps the reverb slot (the tail cuts for a moment) and reads it back."""
-        if switch_reverb(self.client, reverb_id, settings) == 0:
-            self.current_reverb = reverb_id
-            self.model.update('reverb:current', reverb_id)
-        self._read_reverb()
+    def _on_applied(self, op):
+        kind = op[0]
+        if kind == 'reverb':
+            self.current_reverb = op[1]
+            self.model.update('reverb:current', op[1])
+            self._read_reverb()
+        elif kind == 'port':
+            self.model.update(f'port:{op[1]}:{op[2]}', op[3])
+        elif kind == 'patch':
+            self.model.update(f'patch:{op[1]}:{op[2]}', op[3])
+        else:
+            self.model.update(f'cc:{op[1]}', op[2])
 
-    def _apply_reverb(self):
+    def _execute(self, ops):
+        return execute_ops(self.client, self.midi, self.cc_params, ops, self._on_applied)
+
+    # ----- the actions --------------------------------------------------------------
+
+    def _apply_name(self):
         with self._lock:
-            reverb_id, self._reverb = self._reverb, None
-        if reverb_id is None or reverb_id == self.current_reverb:
+            name, self._name = self._name, None
+        if name is not None:
+            self.store.set_name(name)
+            self._publish_state()
+
+    def _apply_select(self):
+        with self._lock:
+            slot, self._select = self._select, None
+        if slot is None:
             return
-        self.store.set_reverb(reverb_id)
-        self._load_reverb(reverb_id, self.store.data['reverb_params'].get(reverb_id, {}))
+        previous = json.loads(json.dumps(self.store.data))
+        self.store.select(slot)
+        with self._lock:
+            self._sets.clear()
+            self._morph = None
+            self._reverb = None
+        failures = self._execute(self.applier.ops(previous, self.store.data, replace=True))
+        if failures:
+            print(f'kiwi-web: slot {slot}: {failures} value(s) not applied', flush=True)
+        self.current_reverb = self.applier.effective_reverb(self.store.data)
+        self.model.update('morph:value', 0.0)
+        self._publish_state()
+        self.led.blink(slot)
+
+    def _apply_save(self):
+        with self._lock:
+            save, self._save = self._save, False
+        if not save:
+            return
+        self.store.save()
+        self._publish_state()
+        self.led.blink(1)
 
     def _apply_reset(self):
         with self._lock:
             reset, self._reset = self._reset, False
         if not reset:
             return
-        params = dict(self.store.data['params'])
-        patch_params = dict(self.store.data['patch_params'])
-        tuned = dict(self.store.data['reverb_params'].get(self.current_reverb, {}))
-        ccs = dict(self.store.data['cc'])
-        self.store.clear()
-        for number in ccs:
-            param = self.cc_params.get(int(number))
-            if param is not None and self.midi is not None and send_cc(self.midi, param, param['baseline']):
-                self.model.update(f'cc:{number}', param['baseline'])
         with self._lock:
             self._sets.clear()
             self._reverb = None
-        if self.current_reverb != self.default_reverb:
-            self._load_reverb(self.default_reverb, self.reverb_baselines.get(self.default_reverb, {}))
-        else:
-            for symbol in tuned:
-                baseline = self.reverb_baselines[self.current_reverb].get(symbol)
-                if baseline is not None and self.client.param_set(reverbs.REVERB_INSTANCE, symbol, baseline) == 0:
-                    self.model.update(f'port:{reverbs.REVERB_INSTANCE}:{symbol}', baseline)
-        for key in params:
+            self._morph = None
+        self._execute(self.applier.ops(self.store.data, StateStore.empty(), replace=True))
+        self.store.clear()
+        self.current_reverb = self.applier.default_reverb
+        self.model.update('morph:value', 0.0)
+        self._publish_state()
+
+    def _apply_reverb(self):
+        with self._lock:
+            reverb_id, self._reverb = self._reverb, None
+        if reverb_id is None or reverb_id == self.current_reverb:
+            return
+        previous = json.loads(json.dumps(self.store.data))
+        self.store.set_reverb(reverb_id)
+        self._execute(self.applier.ops(previous, self.store.data, replace=False))
+        self._publish_state()
+
+    def _apply_morph(self):
+        with self._lock:
+            t, self._morph = self._morph, None
+        if t is None:
+            return
+        slot = self.store.slot
+        a = self.store.read_slot(slot)
+        b = self.store.read_slot(slot % self.store.slots + 1)
+        target = self.applier.morph(a, b, t, self.current_reverb)
+        self._execute(self.applier.ops(self.store.data, target, replace=False))
+        for key, value in target['params'].items():
             instance, symbol = StateStore.split_key(key)
-            baseline = self.baselines.get(('port', instance, symbol))
-            if baseline is not None and self.client.param_set(instance, symbol, baseline) == 0:
-                self.model.update(f'port:{instance}:{symbol}', baseline)
-        for key in patch_params:
-            instance, uri = StateStore.split_key(key)
-            baseline = self.baselines.get(('patch', instance, uri))
-            if baseline is not None and self.client.patch_set(instance, uri, baseline) == 0:
-                self.model.update(f'patch:{instance}:{uri}', baseline)
-        self.model.update('status:saved', time.time())
+            self.store.set_param(instance, symbol, value, self.applier.port[(instance, symbol)]['baseline'])
+        for number, value in target['cc'].items():
+            self.store.set_cc(int(number), value, self.applier.cc[int(number)]['baseline'])
+        for reverb_id, settings in target['reverb_params'].items():
+            for symbol, value in settings.items():
+                self.store.set_reverb_param(reverb_id, symbol, value, self.applier.reverb[reverb_id][symbol]['baseline'])
+        self.model.update('morph:value', t)
+        self._publish_state()
 
     def _apply_sets(self):
         with self._lock:
@@ -327,21 +433,21 @@ class HostLink:
                 if param is not None and self.midi is not None and send_cc(self.midi, param, value):
                     self.model.update(f'cc:{name}', value)
                     self.store.set_cc(int(name), value, param['baseline'])
-                continue
-            if kind == 'port' and instance == reverbs.REVERB_INSTANCE:
-                baseline = self.reverb_baselines.get(self.current_reverb, {}).get(name)
+            elif kind == 'port' and instance == reverbs.REVERB_INSTANCE:
+                baseline = self.applier.reverb.get(self.current_reverb, {}).get(name, {}).get('baseline')
                 if self.client.param_set(instance, name, value) == 0:
                     self.model.update(f'port:{instance}:{name}', value)
                     self.store.set_reverb_param(self.current_reverb, name, value, baseline)
-                continue
-            baseline = self.baselines.get((kind, instance, name))
-            if kind == 'port':
+            elif kind == 'port':
+                baseline = self.applier.port.get((instance, name), {}).get('baseline')
                 if self.client.param_set(instance, name, value) == 0:
                     self.model.update(f'port:{instance}:{name}', value)
                     self.store.set_param(instance, name, value, baseline)
             elif self.client.patch_set(instance, name, value) == 0:
                 self.model.update(f'patch:{instance}:{name}', value)
-                self.store.set_patch_param(instance, name, value, baseline)
+                self.store.set_patch_param(instance, name, value, self.applier.patch.get((instance, name)))
+        if sets:
+            self.model.update('slot:dirty', self.store.dirty)
 
     def _apply_reads(self):
         with self._lock:
@@ -349,7 +455,9 @@ class HostLink:
         for instance, symbol in reads:
             value = self._read(instance, symbol)
             if value is not None:
-                self.store.set_param(instance, symbol, value, self.baselines.get(('port', instance, symbol)))
+                self.store.set_param(instance, symbol, value, self.applier.port.get((instance, symbol), {}).get('baseline'))
+        if reads:
+            self.model.update('slot:dirty', self.store.dirty)
 
 
 def load_metadata(params_path, patch):
@@ -371,6 +479,8 @@ def load_metadata(params_path, patch):
             else:
                 param['baseline'] = param['default']
     meta['cc_map'] = [vars(m) for m in patch.cc_map]
+    meta['slots'] = StateStore.SLOTS
+    meta['morph_cc'] = MORPH_CC
     return meta
 
 
@@ -386,16 +496,12 @@ class App:
         self.reverb_ranges = {r['id']: {q['symbol']: (q['min'], q['max']) for q in r['params']}
                               for r in self.meta['reverbs']}
         self.model = Model()
-        self.store = StateStore(args.state, delay=args.save_delay)
+        self.store = StateStore(args.state_dir)
         self.store.load()
-        for key, value in self.store.data['patch_params'].items():
-            instance, uri = StateStore.split_key(key)
-            self.model.update(f'patch:{instance}:{uri}', value)
         self.client = HostClient(('127.0.0.1', args.host_port))
         self.link = HostLink(self.model, self.client, self.meta, self.store,
                              units_ready or systemd_units_ready,
-                             midi=RawMidi(args.midi_device or find_device()))
-        self.monitor = MidiMonitor(self.on_midi, command=monitor_command)
+                             midi=RawMidi(args.midi_device or find_device()), led=Led(args.led))
         self.cc_targets = {(m.channel, m.cc): (m.instance, m.symbol) for m in patch.cc_map}
         self.active_notes = set()
         self._streams = 0
@@ -403,6 +509,12 @@ class App:
         with open(os.path.join(args.static, 'index.html'), 'rb') as f:
             self.index = self._cached(f.read())
         self.meta_file = self._cached(json.dumps(self.meta).encode())
+        # Always on: the morph CC and the button must work with no page open.
+        self.monitor = MidiMonitor(self.on_midi, command=monitor_command)
+        try:
+            self.monitor.start()
+        except OSError as error:
+            print(f'kiwi-web: MIDI monitor not started: {error!r}', flush=True)
 
     @staticmethod
     def _cached(body):
@@ -416,6 +528,8 @@ class App:
             self.active_notes.discard(event['note'])
         elif kind == 'cc':
             self.model.update(f"midi:cc:{event['controller']}", event['value'])
+            if event['channel'] == 0 and event['controller'] == MORPH_CC:
+                self.link.request_morph(event['value'] / 127)
             target = self.cc_targets.get((event['channel'], event['controller']))
             if target is not None:
                 self.link.request_read(*target)
@@ -450,25 +564,16 @@ class App:
         return True
 
     def open_stream(self):
-        # Monitor start/stop happen under the lock so a closing and an opening
-        # viewer cannot leave the monitor stopped while someone is watching.
         with self._streams_lock:
             if self._streams >= MAX_STREAMS:
                 return False
             self._streams += 1
-            if self._streams == 1:
-                try:
-                    self.monitor.start()
-                except OSError as error:
-                    print(f'kiwi-web: MIDI monitor not started: {error!r}', flush=True)
         self.link.add_viewer()
         return True
 
     def close_stream(self):
         with self._streams_lock:
             self._streams -= 1
-            if self._streams == 0:
-                self.monitor.stop()
         self.link.remove_viewer()
 
 
@@ -507,6 +612,9 @@ class Handler(BaseHTTPRequestHandler):
             body = body_gz
         self._send(200, body, content_type, headers)
 
+    def _loopback(self):
+        return self.client_address[0] in ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+
     def _outsider(self):
         if (security.is_private(self.client_address[0])
                 and security.host_allowed(self.headers.get('Host'), self.connection.getsockname()[0],
@@ -531,32 +639,69 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self._outsider():
             return
-        if not security.same_origin(self.headers.get('Origin'), self.headers.get('Host')):
+        # Requests from the Pi itself (the button scripts) carry no Origin.
+        if not self._loopback() and not security.same_origin(self.headers.get('Origin'), self.headers.get('Host')):
             self._send(403, b'cross-origin request refused\n')
             return
-        length = int(self.headers.get('Content-Length') or 0)
-        if length > MAX_BODY:
-            self._send(413, b'too large\n')
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > MAX_BODY:
+            self.close_connection = True
+            self._send(413 if length > 0 else 400, b'bad length\n')
             return
         try:
             body = json.loads(self.rfile.read(length) or b'{}')
         except ValueError:
             self._send(400, b'bad json\n')
             return
+        if not isinstance(body, dict):
+            body = {}
         path = self.path.split('?', 1)[0]
+        link = self.app.link
+        store = self.app.store
         if path == '/set':
-            ok = isinstance(body, dict) and self.app.apply_changes(body.get('changes'))
-            self._send(204 if ok else 400)
+            self._send(204 if self.app.apply_changes(body.get('changes')) else 400)
         elif path == '/reset':
-            self.app.link.request_reset()
+            link.request_reset()
             self._send(204)
         elif path == '/reverb':
-            reverb_id = body.get('id') if isinstance(body, dict) else None
-            if reverb_id in self.app.reverb_ranges:
-                self.app.link.request_reverb(reverb_id)
+            if body.get('id') in self.app.reverb_ranges:
+                link.request_reverb(body['id'])
                 self._send(204)
             else:
                 self._send(400, b'unknown reverb\n')
+        elif path == '/slot/next':
+            link.request_select(store.slot % store.slots + 1)
+            self._send(204)
+        elif path == '/slot/prev':
+            link.request_select((store.slot - 2) % store.slots + 1)
+            self._send(204)
+        elif path == '/slot/select':
+            slot = body.get('slot')
+            if isinstance(slot, int) and 1 <= slot <= store.slots:
+                link.request_select(slot)
+                self._send(204)
+            else:
+                self._send(400, b'bad slot\n')
+        elif path == '/slot/save':
+            link.request_save()
+            self._send(204)
+        elif path == '/slot/name':
+            name = body.get('name')
+            if isinstance(name, str) and name.strip():
+                link.request_name(name)
+                self._send(204)
+            else:
+                self._send(400, b'bad name\n')
+        elif path == '/morph':
+            value = body.get('value')
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                link.request_morph(value)
+                self._send(204)
+            else:
+                self._send(400, b'bad value\n')
         else:
             self._send(404, b'not found\n')
 
@@ -566,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.close_connection = True
         # A peer that vanished without closing (phone left Wi-Fi) would otherwise
-        # keep this stream, the mod-host link and the MIDI monitor alive for ~15 min.
+        # keep this stream and the mod-host link alive for ~15 min.
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         if hasattr(socket, 'TCP_USER_TIMEOUT'):
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 20000)
@@ -605,27 +750,19 @@ def make_server(address, app):
 
 
 def restore(args):
-    """Replays the autosaved state into mod-host (kiwi-restore.service)."""
-    store = StateStore(args.state)
-    data = store.load()
+    """Applies the current preset slot to a freshly loaded patch (kiwi-restore.service)."""
+    store = StateStore(args.state_dir)
+    store.load()
     try:
         with open(args.patch) as f:
             meta = load_metadata(args.params, parse_patch(f.read()))
     except (OSError, ValueError) as error:
-        print(f'kiwi-web: no parameter metadata, reverb not restored: {error}', flush=True)
-        meta = {'reverbs': [], 'default_reverb': None}
-    default_reverb = meta['default_reverb']
-    reverb_id = data['reverb'] if data['reverb'] in reverb_baselines(meta) else default_reverb
-    reverb_settings = data['reverb_params'].get(reverb_id, {}) if reverb_id else {}
-    ccs = cc_controls(meta) if 'plugins' in meta else {}
-    saved_ccs = {int(n): v for n, v in data['cc'].items() if int(n) in ccs}
-    if saved_ccs:
-        midi = RawMidi(args.midi_device or find_device())
-        sent = sum(send_cc(midi, ccs[n], v) for n, v in saved_ccs.items())
-        midi.close()
-        print(f'kiwi-web: sent {sent} of {len(saved_ccs)} saved CC(s)', flush=True)
-    if not data['params'] and not data['patch_params'] and reverb_id == default_reverb and not reverb_settings:
-        print('kiwi-web: nothing more to restore', flush=True)
+        print(f'kiwi-web: no parameter metadata, nothing restored: {error}', flush=True)
+        return 0
+    applier = Applier(meta)
+    ops = applier.ops(StateStore.empty(), store.data, replace=False)
+    if not ops:
+        print(f'kiwi-web: slot {store.slot}: nothing to restore', flush=True)
         return 0
     client = HostClient(('127.0.0.1', args.host_port))
     deadline = time.monotonic() + 60
@@ -638,31 +775,18 @@ def restore(args):
                 print('kiwi-web: mod-host not reachable', flush=True)
                 return 1
             time.sleep(1)
+    midi = RawMidi(args.midi_device or find_device())
     failures = 0
-    total = len(data['params']) + len(data['patch_params'])
     try:
-        if reverb_id != default_reverb:
-            failures += switch_reverb(client, reverb_id, reverb_settings)
-            total += 1
-        elif reverb_settings:
-            for symbol, value in reverb_settings.items():
-                failures += client.param_set(reverbs.REVERB_INSTANCE, symbol, value) != 0
-            total += len(reverb_settings)
-        for key, value in data['params'].items():
-            instance, symbol = StateStore.split_key(key)
-            if instance == reverbs.REVERB_INSTANCE:
-                continue   # reverb settings live in reverb_params; this is a stale entry
-            failures += client.param_set(instance, symbol, value) != 0
-        for key, value in data['patch_params'].items():
-            instance, uri = StateStore.split_key(key)
-            failures += client.patch_set(instance, uri, value) != 0
+        failures = execute_ops(client, midi, cc_controls(meta), ops)
     except HostError as error:
         # Logged, not fatal: a failed unit would keep kiwi-web waiting.
         print(f'kiwi-web: restore stopped: {error}', flush=True)
-        failures = total
+        failures = len(ops)
     finally:
         client.close()
-    print(f'kiwi-web: restored {total} value(s), {failures} failure(s)', flush=True)
+        midi.close()
+    print(f'kiwi-web: slot {store.slot}: {len(ops)} operation(s), {failures} failure(s)', flush=True)
     return 0
 
 
@@ -675,10 +799,10 @@ def parse_args(argv=None):
     parser.add_argument('--patch', default=os.path.join(repo, 'host', 'kiwi.patch'))
     parser.add_argument('--params', default=os.path.join(web, 'params.json'))
     parser.add_argument('--static', default=os.path.join(web, 'static'))
-    parser.add_argument('--state', default=os.path.expanduser('~/.local/state/kiwi/state.json'))
-    parser.add_argument('--save-delay', type=float, default=5.0)
+    parser.add_argument('--state-dir', default=os.path.expanduser('~/.local/state/kiwi'))
     parser.add_argument('--midi-device', default=None,
                         help='raw MIDI device for CC controls (default: the VirMIDI card)')
+    parser.add_argument('--led', default='/sys/kernel/pisound/led')
     parser.add_argument('--restore', action='store_true')
     return parser.parse_args(argv)
 

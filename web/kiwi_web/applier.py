@@ -55,7 +55,11 @@ class Applier:
         current_reverb = self.effective_reverb(current)
         target_reverb = self.effective_reverb(target)
         if target_reverb != current_reverb:
-            operations.append(('reverb', target_reverb, dict(target['reverb_params'].get(target_reverb, {}))))
+            # A re-added plugin starts from its own defaults, so send every baseline
+            # explicitly, then the slot's values on top.
+            settings = {s: p['baseline'] for s, p in self.reverb.get(target_reverb, {}).items()}
+            settings.update(target['reverb_params'].get(target_reverb, {}))
+            operations.append(('reverb', target_reverb, settings))
         port_baselines = {f'{i}:{s}': p['baseline'] for (i, s), p in self.port.items()}
         for key, value in self._diff(current['params'], target['params'], port_baselines, replace):
             instance, symbol = key.split(':', 1)

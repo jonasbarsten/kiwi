@@ -62,9 +62,9 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(ops[0], ('reverb', 'calf', {'decay_time': 0.9}))
         self.assertNotIn(('port', 6, 'MID_RT60', 3), ops)   # the old reverb is gone, no reset needed
 
-    def test_back_to_default_reverb(self):
+    def test_back_to_default_reverb_sends_patch_baselines(self):
         current = doc(reverb='calf')
-        self.assertEqual(self.applier.ops(current, doc(), replace=True), [('reverb', 'zita', {})])
+        self.assertEqual(self.applier.ops(current, doc(), replace=True), [('reverb', 'zita', {'MID_RT60': 3})])
 
     def test_reverb_param_diff_when_same_reverb(self):
         current = doc(reverb='calf', reverb_params={'calf': {'decay_time': 0.9}})

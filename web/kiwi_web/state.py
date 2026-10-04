@@ -69,6 +69,8 @@ def _write_atomic(path, text):
 
 
 class StateStore:
+    SLOTS = SLOTS
+
     def __init__(self, directory, slots=SLOTS):
         self.directory = directory
         self.slots = slots
