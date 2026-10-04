@@ -72,6 +72,29 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(self.applier.ops(current, target, replace=True), [('port', 6, 'decay_time', 3.0)])
         self.assertEqual(self.applier.ops(target, doc(reverb='calf'), replace=True), [('port', 6, 'decay_time', 1.5)])
 
+    def test_preset_op_precedes_patch_params(self):
+        target = doc(preset='file:///p/A.ttl', patch_params={'0:ptq:Volume': 0.5}, reverb='calf')
+        ops = self.applier.ops(doc(), target, replace=True)
+        kinds = [op[0] for op in ops]
+        self.assertEqual(kinds, ['reverb', 'preset', 'patch'])
+        self.assertEqual(ops[1], ('preset', 'file:///p/A.ttl'))
+
+    def test_no_preset_leaves_the_piano_alone_without_a_patch_default(self):
+        current = doc(preset='file:///p/A.ttl')
+        self.assertEqual(self.applier.ops(current, doc(), replace=True), [])
+        self.assertEqual(self.applier.ops(current, doc(preset='file:///p/A.ttl'), replace=True), [])
+
+    def test_patch_default_preset_is_the_baseline(self):
+        applier = Applier(dict(META, default_preset='file:///p/Default.ttl'))
+        current = doc(preset='file:///p/A.ttl')
+        self.assertEqual(applier.ops(current, doc(), replace=True), [('preset', 'file:///p/Default.ttl')])
+        self.assertEqual(applier.ops(doc(), doc(), replace=True), [])
+
+    def test_morph_carries_the_preset(self):
+        target = self.applier.morph(doc(), doc(), 0.5, 'zita', preset='file:///p/A.ttl')
+        self.assertEqual(target['preset'], 'file:///p/A.ttl')
+        self.assertEqual(self.applier.ops(doc(preset='file:///p/A.ttl'), target, replace=False), [])
+
     def test_unchanged_values_produce_no_ops(self):
         current = doc(params={'5:piano_vol': 0.3})
         self.assertEqual(self.applier.ops(current, doc(params={'5:piano_vol': 0.3}), replace=True), [])

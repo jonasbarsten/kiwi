@@ -35,6 +35,11 @@ class ParsePatchTest(unittest.TestCase):
             CcMapping(3, 'blend', 0, 26, 0.0, 2.0),
         ])
 
+    def test_preset_load(self):
+        patch = parse_patch('preset_load 0 file:///x/a.ttl\n')
+        self.assertEqual(patch.presets, {0: 'file:///x/a.ttl'})
+        self.assertEqual(parse_patch(SAMPLE).presets, {})
+
     def test_ignores_comments_and_connects(self):
         patch = parse_patch('# add x 1\nconnect a b\n')
         self.assertEqual(patch.instances, {})

@@ -30,10 +30,14 @@ class Applier:
         self.reverb = {r['id']: {p['symbol']: {'baseline': p['baseline'], 'type': p.get('type', 'float')}
                                  for p in r['params']} for r in meta.get('reverbs', [])}
         self.default_reverb = meta.get('default_reverb')
+        self.default_preset = meta.get('default_preset')   # the Pianoteq preset kiwi.patch loads, if any
 
     def effective_reverb(self, document):
         reverb_id = document.get('reverb')
         return reverb_id if reverb_id in self.reverb else self.default_reverb
+
+    def effective_preset(self, document):
+        return document.get('preset') or self.default_preset
 
     @staticmethod
     def _diff(current, target, baselines, replace):
@@ -60,6 +64,11 @@ class Applier:
             settings = {s: p['baseline'] for s, p in self.reverb.get(target_reverb, {}).items()}
             settings.update(target['reverb_params'].get(target_reverb, {}))
             operations.append(('reverb', target_reverb, settings))
+        # The Pianoteq preset goes before Pianoteq's parameters, which apply on top of it.
+        # With no preset in the target and none in the patch, the piano is left as it is.
+        target_preset = self.effective_preset(target)
+        if target_preset is not None and target_preset != self.effective_preset(current):
+            operations.append(('preset', target_preset))
         port_baselines = {f'{i}:{s}': p['baseline'] for (i, s), p in self.port.items()}
         for key, value in self._diff(current['params'], target['params'], port_baselines, replace):
             instance, symbol = key.split(':', 1)
@@ -79,12 +88,12 @@ class Applier:
             operations.append(('cc', int(key), value))
         return operations
 
-    def morph(self, a, b, t, reverb_id):
+    def morph(self, a, b, t, reverb_id, preset=None):
         """A document between `a` (t = 0) and `b` (t = 1) for continuous parameters only."""
         t = min(max(float(t), 0.0), 1.0)
-        # The reverb choice is never morphed: the target keeps the current one, so
-        # applying it against RAM never emits a reverb switch.
-        target = {'params': {}, 'patch_params': {}, 'preset': None, 'favourites': [],
+        # The reverb choice and the Pianoteq preset are never morphed: the target keeps
+        # the current ones, so applying it against RAM never emits a switch.
+        target = {'params': {}, 'patch_params': {}, 'preset': preset, 'favourites': [],
                   'reverb': reverb_id if reverb_id in self.reverb else None,
                   'reverb_params': {}, 'cc': {}, 'name': ''}
 

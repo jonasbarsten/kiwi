@@ -8,6 +8,9 @@ class FakeHost:
         self.params = dict(params or {})
         self.patch = {}
         self.instances = {}
+        self.bundles = []
+        self.preset = None
+        self.known_presets = None   # None: accept any preset URI; else a set
         self.connections = []
         self.log = []
         self.chunks = []
@@ -82,6 +85,14 @@ class FakeHost:
             return 'resp 0'
         if parts[0] == 'connect':
             self.connections.append((parts[1], parts[2]))
+            return 'resp 0'
+        if parts[0] == 'bundle_add':
+            self.bundles.append(parts[1])
+            return 'resp 0'
+        if parts[0] == 'preset_load':
+            if self.known_presets is not None and parts[2] not in self.known_presets:
+                return 'resp -105'
+            self.preset = parts[2]
             return 'resp 0'
         return 'resp -1'
 

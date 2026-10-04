@@ -168,6 +168,10 @@ class StateStore:
     def set_cc(self, number, value, baseline):
         self._store(self.data['cc'], str(number), value, baseline)
 
+    def set_preset(self, uri):
+        self.data['preset'] = uri
+        self._touch()
+
     def set_reverb(self, reverb_id):
         self.data['reverb'] = reverb_id
         self._touch()

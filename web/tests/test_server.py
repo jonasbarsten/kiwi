@@ -42,6 +42,14 @@ PARAMS = {'plugins': [
         {'symbol': 'decay_time', 'name': 'Decay', 'min': 0.4, 'max': 15, 'default': 1.5, 'type': 'float'}]},
 ], 'default_reverb': 'zita'}
 SLEEPER = [sys.executable, '-c', 'import time; time.sleep(60)']
+PRESET_A = 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/MKI_Amped.ttl'
+PRESET_B = 'file:///x/Pianoteq%208-factory-presets-Steinway%20D.lv2/HB_Steinway_D_Blues.ttl'
+PRESETS = {'presets': [
+    {'uri': PRESET_A, 'name': 'MKI Amped', 'family': 'Electric',
+     'bundle': 'file:///x/Pianoteq%208-factory-presets-Electric.lv2/'},
+    {'uri': PRESET_B, 'name': 'HB Steinway D Blues', 'family': 'Steinway D',
+     'bundle': 'file:///x/Pianoteq%208-factory-presets-Steinway%20D.lv2/'},
+]}
 
 
 def wait_for(predicate, timeout=5.0):
@@ -55,7 +63,8 @@ def wait_for(predicate, timeout=5.0):
 
 def write_fixture(tmp):
     paths = {}
-    for name, content in [('kiwi.patch', PATCH), ('params.json', json.dumps(PARAMS))]:
+    for name, content in [('kiwi.patch', PATCH), ('params.json', json.dumps(PARAMS)),
+                          ('presets.json', json.dumps(PRESETS))]:
         paths[name] = os.path.join(tmp, name)
         with open(paths[name], 'w') as f:
             f.write(content)
@@ -83,8 +92,9 @@ class ServerTest(unittest.TestCase):
         self.midi_path = os.path.join(self.dir.name, 'midi')
         self.led_path = os.path.join(self.dir.name, 'led')
         args = parse_args(['--port', '0', '--host-port', str(self.host.port), '--patch', paths['kiwi.patch'],
-                           '--params', paths['params.json'], '--static', paths['static'],
-                           '--state-dir', self.state_dir, '--midi-device', self.midi_path, '--led', self.led_path])
+                           '--params', paths['params.json'], '--presets', paths['presets.json'],
+                           '--static', paths['static'], '--state-dir', self.state_dir,
+                           '--midi-device', self.midi_path, '--led', self.led_path])
         self.app = App(args, units_ready=lambda: True, monitor_command=SLEEPER)
         threading.Thread(target=self.app.link.run, daemon=True).start()
         self.server = make_server(('127.0.0.1', 0), self.app)
@@ -452,6 +462,55 @@ class ServerTest(unittest.TestCase):
     def test_monitor_runs_without_viewers(self):
         self.assertIsNotNone(self.app.monitor._proc)
 
+    # --- Pianoteq presets ------------------------------------------------------
+
+    def test_presets_json_served(self):
+        status, body = self.request('GET', '/presets.json')
+        self.assertEqual(status, 200)
+        self.assertEqual([p['name'] for p in json.loads(body)['presets']], ['MKI Amped', 'HB Steinway D Blues'])
+
+    def test_preset_endpoint_loads_and_marks_dirty(self):
+        conn, response = self.open_events()
+        self.assertIsNone(self.read_until(response, 'preset:current')['preset:current'])
+        self.assertEqual(self.post('/preset', {'uri': PRESET_A}), 204)
+        self.assertEqual(self.read_until(response, 'preset:current', PRESET_A)['preset:current'], PRESET_A)
+        self.assertEqual(self.host.preset, PRESET_A)
+        self.assertIn('/x/Pianoteq%208-factory-presets-Electric.lv2/', self.host.bundles)
+        self.assertEqual(self.host.patch.get((0, 'https://www.modartt.com/lv2/Pianoteq8:Reverb_20Switch')), 0.0)
+        self.assertTrue(self.read_until(response, 'slot:dirty', True)['slot:dirty'])
+        self.assertEqual(self.app.store.data['preset'], PRESET_A)
+        self.assertEqual(self.post('/preset', {'uri': 'file:///nope.ttl'}), 400)
+        conn.close()
+
+    def test_unknown_preset_is_refused(self):
+        self.host.known_presets = set()      # mod-host cannot find the file
+        self.assertEqual(self.post('/preset', {'uri': PRESET_A}), 204)
+        time.sleep(0.5)
+        self.assertIsNone(self.app.store.data['preset'], 'a failed load must not become RAM state')
+        self.assertIsNone(self.host.preset)
+
+    def test_slot_with_preset_and_params(self):
+        os.makedirs(os.path.join(self.state_dir, 'presets'))
+        uri = 'https://www.modartt.com/lv2/Pianoteq8:Volume'
+        with open(self.slot_file(2), 'w') as f:
+            json.dump({'preset': PRESET_B, 'patch_params': {f'0:{uri}': 0.4}}, f)
+        self.post('/slot/select', {'slot': 2})
+        self.assertTrue(wait_for(lambda: self.host.preset == PRESET_B))
+        self.assertTrue(wait_for(lambda: self.host.patch.get((0, uri)) == 0.4))
+        start = next(i for i, line in enumerate(self.host.log) if line.startswith('preset_load'))
+        self.assertTrue(any(line.startswith(f'patch_set 0 {uri}') for line in self.host.log[start:]),
+                        'the slot parameters must apply after its preset')
+
+    def test_favourites_endpoint(self):
+        conn, response = self.open_events()
+        self.assertEqual(self.read_until(response, 'preset:favourites')['preset:favourites'], [])
+        self.assertEqual(self.post('/favourite', {'uri': PRESET_B, 'on': True}), 204)
+        self.assertEqual(self.read_until(response, 'preset:favourites', [PRESET_B])['preset:favourites'], [PRESET_B])
+        with open(os.path.join(self.state_dir, 'favourites.json')) as f:
+            self.assertEqual(json.load(f), [PRESET_B])
+        self.assertEqual(self.post('/favourite', {'uri': 'file:///nope.ttl', 'on': True}), 400)
+        conn.close()
+
 
 class UnitsReadyTest(unittest.TestCase):
     def fake_run(self, host, patch, restore):
@@ -505,6 +564,21 @@ class RestoreTest(unittest.TestCase):
             self.assertNotIn('param_set 6 decay 1.600000', host.log)   # stale key: not a known parameter
             with open(midi, 'rb') as f:
                 self.assertEqual(f.read(), b'\xb0\x69\x7f')
+            host.close()
+
+    def test_restore_applies_preset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_fixture(tmp)
+            state_dir = os.path.join(tmp, 'state')
+            os.makedirs(os.path.join(state_dir, 'presets'))
+            with open(os.path.join(state_dir, 'presets', '1.json'), 'w') as f:
+                json.dump({'preset': PRESET_A}, f)
+            host = FakeHost({(5, 'piano_vol'): 0.8})
+            args = parse_args(['--state-dir', state_dir, '--host-port', str(host.port),
+                               '--patch', paths['kiwi.patch'], '--params', paths['params.json'],
+                               '--presets', paths['presets.json']])
+            self.assertEqual(restore(args), 0)
+            self.assertEqual(host.preset, PRESET_A)
             host.close()
 
     def test_nothing_to_restore_needs_no_host(self):

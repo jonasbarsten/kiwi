@@ -18,6 +18,7 @@ class Patch:
     baseline: dict = field(default_factory=dict)
     patch_baseline: dict = field(default_factory=dict)
     cc_map: list = field(default_factory=list)
+    presets: dict = field(default_factory=dict)   # instance -> preset URI loaded by the patch
 
 
 def parse_patch(text):
@@ -34,6 +35,8 @@ def parse_patch(text):
             patch.baseline[(int(parts[1]), parts[2])] = float(parts[3])
         elif command == 'patch_set' and len(parts) >= 4:
             patch.patch_baseline[(int(parts[1]), parts[2])] = ' '.join(parts[3:])
+        elif command == 'preset_load' and len(parts) == 3:
+            patch.presets[int(parts[1])] = parts[2]
         elif command == 'midi_map' and len(parts) == 7:
             patch.cc_map.append(CcMapping(int(parts[1]), parts[2], int(parts[3]), int(parts[4]),
                                           float(parts[5]), float(parts[6])))

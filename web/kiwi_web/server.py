@@ -19,7 +19,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import reverbs, security
+from . import presets, reverbs, security
 from .applier import Applier
 from .led import Led
 from .midi import MidiMonitor, describe
@@ -130,7 +130,19 @@ def switch_reverb(client, reverb_id, settings):
     return failures
 
 
-def execute_ops(client, midi, cc_params, ops, on_applied=None):
+def load_preset(client, uri, bundles):
+    """Loads a Pianoteq preset (bundle_add, preset_load, reverb off). False if unknown or refused."""
+    bundle = bundles.get(uri)
+    if bundle is None:
+        return False
+    ok = True
+    for command in presets.load_commands(uri, bundle):
+        code, _ = client.command(command)
+        ok = ok and code >= 0
+    return ok
+
+
+def execute_ops(client, midi, cc_params, ops, on_applied=None, bundles=None):
     """Runs Applier operations against mod-host / the MIDI device.
 
     `on_applied(op)` is called for every operation that succeeded. Returns the
@@ -141,6 +153,8 @@ def execute_ops(client, midi, cc_params, ops, on_applied=None):
         kind = op[0]
         if kind == 'reverb':
             ok = switch_reverb(client, op[1], op[2]) == 0
+        elif kind == 'preset':
+            ok = load_preset(client, op[1], bundles or {})
         elif kind == 'port':
             ok = client.param_set(op[1], op[2], op[3]) == 0
         elif kind == 'patch':
@@ -157,7 +171,8 @@ def execute_ops(client, midi, cc_params, ops, on_applied=None):
 class HostLink:
     """Owns the single mod-host connection, only while a page or a change needs it."""
 
-    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None, led=None):
+    def __init__(self, model, client, meta, store, units_ready, clock=time.monotonic, midi=None, led=None,
+                 bundles=None, favourites=None):
         self.model = model
         self.client = client
         self.store = store
@@ -165,6 +180,8 @@ class HostLink:
         self.clock = clock
         self.midi = midi
         self.led = led or Led()
+        self.bundles = bundles or {}             # preset URI -> bundle URI
+        self.favourites = favourites             # presets.Favourites or None
         self.applier = Applier(meta)
         self.cc_params = cc_controls(meta)
         self.port_params = [(p['instance'], q['symbol'])
@@ -181,6 +198,7 @@ class HostLink:
         self._save = False
         self._morph = None
         self._name = None
+        self._preset = None
         self._host_token = None
         self._viewers = 0
         self._last_need = None
@@ -244,6 +262,17 @@ class HostLink:
     def request_morph(self, t):
         self._request('_morph', min(max(float(t), 0.0), 1.0))
 
+    def request_preset(self, uri):
+        self._request('_preset', uri)
+
+    def set_favourite(self, uri, on):
+        """Stars/unstars a preset (the one deliberate write outside save/select)."""
+        if self.favourites is None:
+            return False
+        self.favourites.toggle(uri, on)
+        self.model.update('preset:favourites', list(self.favourites.uris))
+        return True
+
     def request_name(self, name, slot=None):
         """Renames the current slot; refused (False) if `slot` names another one."""
         with self._lock:
@@ -260,7 +289,8 @@ class HostLink:
     def _needed(self):
         with self._lock:
             if (self._viewers > 0 or self._sets or self._reads or self._reset or self._reverb is not None
-                    or self._select is not None or self._step or self._save or self._morph is not None):
+                    or self._select is not None or self._step or self._save or self._morph is not None
+                    or self._preset is not None):
                 return True
             return self._last_need is not None and self.clock() - self._last_need < IDLE_DISCONNECT
 
@@ -287,6 +317,7 @@ class HostLink:
                 self._apply_select()
                 self._apply_reset()
                 self._apply_reverb()
+                self._apply_preset()
                 self._apply_morph()
                 self._apply_sets()
                 self._apply_reads()
@@ -349,6 +380,8 @@ class HostLink:
         self.model.update('slot:names', store.names())
         self.model.update('slot:dirty', store.dirty)
         self.model.update('reverb:current', self.current_reverb)
+        self.model.update('preset:current', self.applier.effective_preset(store.data))
+        self.model.update('preset:favourites', list(self.favourites.uris) if self.favourites else [])
         for number, param in self.cc_params.items():
             self.model.update(f'cc:{number}', store.data['cc'].get(str(number), param['baseline']))
         for key, value in store.data['patch_params'].items():
@@ -391,11 +424,13 @@ class HostLink:
             self.model.update(f'port:{op[1]}:{op[2]}', op[3])
         elif kind == 'patch':
             self.model.update(f'patch:{op[1]}:{op[2]}', op[3])
+        elif kind == 'preset':
+            self.model.update('preset:current', op[1])
         else:
             self.model.update(f'cc:{op[1]}', op[2])
 
     def _execute(self, ops):
-        return execute_ops(self.client, self.midi, self.cc_params, ops, self._on_applied)
+        return execute_ops(self.client, self.midi, self.cc_params, ops, self._on_applied, self.bundles)
 
     # ----- the actions --------------------------------------------------------------
 
@@ -463,6 +498,16 @@ class HostLink:
         self._execute(self.applier.ops(previous, self.store.data, replace=False))
         self._publish_state()
 
+    def _apply_preset(self):
+        with self._lock:
+            uri, self._preset = self._preset, None
+        if uri is None or uri == self.applier.effective_preset(self.store.data):
+            return
+        # RAM takes the preset only once mod-host has loaded it.
+        if self._execute([('preset', uri)]) == 0:
+            self.store.set_preset(uri)
+        self._publish_state()
+
     def _apply_morph(self):
         with self._lock:
             t, self._morph = self._morph, None
@@ -471,7 +516,7 @@ class HostLink:
         slot = self.store.slot
         a = self.store.read_slot(slot)
         b = self.store.read_slot(slot % self.store.slots + 1)
-        target = self.applier.morph(a, b, t, self.current_reverb)
+        target = self.applier.morph(a, b, t, self.current_reverb, preset=self.store.data['preset'])
         self._execute(self.applier.ops(self.store.data, target, replace=False))
         for key, value in target['params'].items():
             instance, symbol = StateStore.split_key(key)
@@ -539,7 +584,19 @@ def load_metadata(params_path, patch):
     meta['cc_map'] = [vars(m) for m in patch.cc_map]
     meta['slots'] = StateStore.SLOTS
     meta['morph_cc'] = MORPH_CC
+    meta['default_preset'] = patch.presets.get(presets.PIANOTEQ_INSTANCE)
     return meta
+
+
+def load_presets(path):
+    """The exported Pianoteq presets (web/presets.json); an empty list if absent."""
+    try:
+        with open(path) as f:
+            entries = json.load(f).get('presets', [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [p for p in entries if isinstance(p, dict) and all(isinstance(p.get(k), str)
+                                                              for k in ('uri', 'name', 'family', 'bundle'))]
 
 
 class App:
@@ -556,10 +613,15 @@ class App:
         self.model = Model()
         self.store = StateStore(args.state_dir)
         self.store.load()
+        self.presets = load_presets(args.presets)
+        self.bundles = {p['uri']: p['bundle'] for p in self.presets}
+        self.favourites = presets.Favourites(os.path.join(args.state_dir, 'favourites.json'))
+        self.favourites.load()
         self.client = HostClient(('127.0.0.1', args.host_port))
         self.link = HostLink(self.model, self.client, self.meta, self.store,
                              units_ready or systemd_units_ready,
-                             midi=RawMidi(args.midi_device or find_device()), led=Led(args.led))
+                             midi=RawMidi(args.midi_device or find_device()), led=Led(args.led),
+                             bundles=self.bundles, favourites=self.favourites)
         self.cc_targets = {(m.channel, m.cc): (m.instance, m.symbol) for m in patch.cc_map}
         self.active_notes = set()
         self._streams = 0
@@ -567,6 +629,7 @@ class App:
         with open(os.path.join(args.static, 'index.html'), 'rb') as f:
             self.index = self._cached(f.read())
         self.meta_file = self._cached(json.dumps(self.meta).encode())
+        self.presets_file = self._cached(json.dumps({'presets': self.presets}).encode())
         # Always on: the morph CC and the button must work with no page open.
         self.monitor = MidiMonitor(self.on_midi, command=monitor_command)
         try:
@@ -689,6 +752,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_cached(self.app.index, 'text/html; charset=utf-8')
         elif path == '/params.json':
             self._send_cached(self.app.meta_file, 'application/json')
+        elif path == '/presets.json':
+            self._send_cached(self.app.presets_file, 'application/json')
         elif path == '/events':
             self._stream()
         else:
@@ -764,6 +829,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(204)
             else:
                 self._send(400, b'bad value\n')
+        elif path == '/preset':
+            uri = body.get('uri')
+            if uri in self.app.bundles:
+                link.request_preset(uri)
+                self._send(204)
+            else:
+                self._send(400, b'unknown preset\n')
+        elif path == '/favourite':
+            uri = body.get('uri')
+            on = body.get('on')
+            if uri in self.app.bundles and isinstance(on, bool):
+                link.set_favourite(uri, on)
+                self._send(204)
+            else:
+                self._send(400, b'bad favourite\n')
         else:
             self._send(404, b'not found\n')
 
@@ -838,9 +918,10 @@ def restore(args):
                 return 1
             time.sleep(1)
     midi = RawMidi(args.midi_device or find_device())
+    bundles = {p['uri']: p['bundle'] for p in load_presets(args.presets)}
     failures = 0
     try:
-        failures = execute_ops(client, midi, cc_controls(meta), ops)
+        failures = execute_ops(client, midi, cc_controls(meta), ops, bundles=bundles)
     except HostError as error:
         # Logged, not fatal: a failed unit would keep kiwi-web waiting.
         print(f'kiwi-web: restore stopped: {error}', flush=True)
@@ -860,6 +941,7 @@ def parse_args(argv=None):
     parser.add_argument('--host-port', type=int, default=5555)
     parser.add_argument('--patch', default=os.path.join(repo, 'host', 'kiwi.patch'))
     parser.add_argument('--params', default=os.path.join(web, 'params.json'))
+    parser.add_argument('--presets', default=os.path.join(web, 'presets.json'))
     parser.add_argument('--static', default=os.path.join(web, 'static'))
     parser.add_argument('--state-dir', default=os.path.expanduser('~/.local/state/kiwi'))
     parser.add_argument('--midi-device', default=None,
