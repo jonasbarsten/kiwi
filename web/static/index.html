@@ -51,8 +51,19 @@ body.mapping .morph input { pointer-events: none; opacity: .55; }
 .row .unmap { display: none; grid-area: value; justify-self: end; min-height: 36px; min-width: 36px; padding: 0 10px; font-size: 14px; }
 body.mapping .row.mapped .unmap { display: inline-block; }
 body.mapping .row.mapped output { display: none; }
-#maphint { display: none; font-size: 14px; color: var(--seed); background: var(--warn); padding: 8px 16px; text-align: center; }
-body.mapping #maphint { display: block; }
+/* Map mode is loud: amber header and page tint, a banner with Done, pulsing Map button. */
+header { flex-wrap: wrap; }
+#maphint { display: none; flex-basis: 100%; align-items: center; gap: 10px; font-size: 15px; color: var(--seed); padding: 6px 0 2px; }
+#maphint span { flex: 1; }
+#maphint button { background: var(--seed); color: var(--core); border-color: var(--seed); font-weight: 700; }
+body.mapping #maphint { display: flex; }
+body.mapping header { background: var(--warn); border-bottom-color: #b87a1c; color: var(--seed); }
+body.mapping header button { background: var(--seed); color: var(--core); border-color: var(--seed); }
+body.mapping #map { animation: pulse 1s ease-in-out infinite alternate; }
+@keyframes pulse { from { box-shadow: 0 0 0 0 rgba(30,26,20,.6); } to { box-shadow: 0 0 0 6px rgba(30,26,20,0); } }
+body.mapping { background: #2b1a06; }
+body.mapping .card { border-color: var(--warn); }
+body.mapping footer { background: var(--warn); color: var(--seed); border-top-color: #b87a1c; }
 main {
   display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1200px; margin: 0 auto;
   padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
@@ -196,8 +207,11 @@ footer {
   <span class="dot" id="mididot" title="MIDI in"></span>
   <button type="button" id="map" aria-pressed="false">Map</button>
   <button type="button" id="panic" class="mappable">Panic</button>
+  <div id="maphint" role="status">
+    <span id="maptext">MAP MODE — tap a control, then move the knob or press the button on your controller.</span>
+    <button type="button" id="mapdone">Done</button>
+  </div>
 </header>
-<div id="maphint">Map mode: tap a control, then move the knob or press the button on your controller. Tap anywhere else to finish.</div>
 <main id="main">
   <section class="card wide" style="padding: 0">
     <div class="presets">
@@ -308,10 +322,13 @@ function learn(target) {
   post('/map/learn', { target });
 }
 
-// In map mode a tap on a row or an action learns it; a tap anywhere else ends map mode.
+// In map mode a tap on a row or an action learns it. Opening and closing sections,
+// the slot sheet and the preset browser still work; a tap on empty space (or Done /
+// Map) ends map mode.
+const NAVIGATION = '#map, #mapdone, summary, #slotsbtn, .pbrowser, .slots, .seg button[data-id]';
 document.addEventListener('click', (event) => {
   if (!mapMode) return;
-  if (event.target.closest('#map')) return;
+  if (event.target.closest(NAVIGATION)) return;
   const unmap = event.target.closest('.unmap');
   if (unmap) {
     event.stopPropagation();
@@ -335,6 +352,9 @@ document.addEventListener('click', (event) => {
 }, true);
 
 function renderMappings() {
+  $('maptext').textContent = learning
+    ? 'MAP MODE — waiting for a CC: move the knob or press the button on your controller…'
+    : 'MAP MODE — tap a control, then move the knob or press the button on your controller.';
   for (const control of controls.values()) renderMapping(control);
   for (const [id, name] of Object.entries(actionTargets)) {
     const el = $(id);
@@ -389,6 +409,7 @@ function renderCcBars() {
 }
 
 $('map').addEventListener('click', () => setMapMode(!mapMode));
+$('mapdone').addEventListener('click', () => setMapMode(false));
 $('panic').addEventListener('click', () => { if (!mapMode) post('/panic'); });
 
 // Some plugins name a port by its symbol (EQ2_FREQ): show it as words instead.
