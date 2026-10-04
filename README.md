@@ -259,6 +259,11 @@ chords every 0.4 s, all modes up):
   (a metronomic glitch at ~88 bpm); Aether and ZamVerb were simply too heavy. The five on
   offer all run at 50–57 % DSP load with none.
 - `mod-host`'s bypass does not stop a plugin's processing; disconnect its input to measure.
+- Switching presets and morphing under load cost nothing measurable; the *preset* can.
+  Plain pianos (NY Steinway D Classical, Ant. Petrof Warm) run the full stress test with
+  zero xruns; "effects" presets such as NY Steinway D Bowed (mallet bounce, note effects)
+  overrun steadily at 24 voices and 128 frames. Try a preset under `kiwi-stress` before
+  trusting it on stage.
 
 ### Pianoteq presets: the key nobody reads
 
